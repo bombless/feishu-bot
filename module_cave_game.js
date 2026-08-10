@@ -42,15 +42,13 @@ class CaveGame {
         return first_prompt
     }
 
-    ask(p) {
+    async *ask(p) {
         if (p !== '1' && p !== '2') throw '请回复1或者2'
-        return (async () => {
-            let ret = '';
-            for await (const piece of this.api.ask(p)) {
-                ret += piece.slice(1);
-            }
-            return ret;
-        })()
+        let ret = '';
+        for await (const piece of this.api.ask(p)) {
+            ret += piece.slice(1);
+            yield ret
+        }
     }
 }
 
