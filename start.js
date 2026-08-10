@@ -48,7 +48,7 @@ wsClient.start({
       if (chatState.get(chat_id)) {
         try {
           const modu = chatState.get(chat_id)
-          stream = modu.ask(msg)
+          stream = modu.ask(msg)()
           responseTitle = '请选择'
           responseContent = ''
 
