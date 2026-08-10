@@ -22,8 +22,12 @@ wsClient.start({
     'im.message.receive_v1': async data => {
       const {
         event_id,
-        message: { chat_id, content }
+        message: { chat_id, content, create_time, message_id }
       } = data
+
+      if (create_time + 10000 < +new Date) {
+        return; // 时间太久远了
+      }
 
       const msg = JSON.parse(content).text
 
@@ -114,14 +118,14 @@ cave 洞穴游戏；
           content: responseContent
         })
       }
-      await client.im.v1.message.create({
-        params: {
-          receive_id_type: 'chat_id'
+      await client.im.v1.message.reply({
+        path: {
+          message_id
         },
         data: {
           receive_id: chat_id,
           content: cardContent,
-          msg_type: 'interactive'
+          msg_type: 'interactive',
         }
       })
       if (stream) {
