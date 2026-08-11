@@ -14,45 +14,41 @@ const first_prompt = `
 2. 这团火也许是救命的稻草，把旁边没用过的柴再加一点免得火灭了
 `
 
-class CaveGame {
-    constructor() {
+const model = process.env.MODEL
 
-        const system = `
+class CaveGame {
+  constructor (chat) {
+    const system = `
 你是一个洞穴探索文字游戏机器人
 每次你要给用户两个选择，用户选择1或2之后你需要输出后面的场景以及对应的选择
         `
 
-        const chat = new Chat({
-            apiKey: process.env.KEY,
-            model: 'glm-5.2',
-            system
-        })
+    chat = Object.assign(chat.clone(), {
+      messages: [
+        { role: 'system', content: system },
+        { role: 'assistant', content: first_prompt }
+      ]
+    })
 
-        
+    this.api = chat
+  }
 
-        chat.messages.push({
-            role: 'assistant',
-            content: first_prompt
-        })
+  prompt () {
+    return first_prompt
+  }
 
-        this.api = chat;
+  ask (p) {
+    if (p !== '1' && p !== '2') throw '请回复1或者2'
+    const api = this.api
+    console.log(api)
+    return async function* () {
+      let ret = ''
+      for await (const piece of api.ask(p)) {
+        ret += piece.slice(1)
+        yield ret
+      }
     }
-
-    prompt() {
-        return first_prompt
-    }
-
-    ask(p) {
-        if (p !== '1' && p !== '2') throw '请回复1或者2'
-        return async function *() {
-            let ret = '';
-            for await (const piece of this.api.ask(p)) {
-                ret += piece.slice(1);
-                yield ret
-            }
-
-        }
-    }
+  }
 }
 
-module.exports = CaveGame;
+module.exports = CaveGame

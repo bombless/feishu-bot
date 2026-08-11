@@ -1,12 +1,12 @@
 // chat.js
 // Node 18+ 原生 fetch + ESM，无需任何编译工具
-
 class Chat {
   constructor (opts) {
-    this.url = 'https://copilot.tencent.com/v2/chat/completions'
+    this.url = opts.url
+    this.modelsUrl = opts.modelsUrl || undefined
     this.apiKey = opts.apiKey
     this.model = opts.model || undefined
-    this.maxHistory = opts.maxHistory ?? 20
+    this.maxHistory = opts.maxHistory ?? 200
     this.extraHeaders = opts.headers || {}
 
     /** @type {{role: string, content: string}[]} */
@@ -17,6 +17,27 @@ class Chat {
     if (opts.system) {
       this.messages.push({ role: 'system', content: opts.system })
     }
+  }
+
+  clone(opts) {
+    opts = opts || {}
+    return new Chat({
+        url: opts.url || this.url,
+        modelsUrl: opts.modelsUrl || this.modelsUrl,
+        apiKey: opts.apiKey || this.apiKey,
+        model: opts.model || this.model,
+        maxHistory: opts.maxHistory || this.maxHistory,
+        headers: opts.headers || this.extraHeaders,
+    })
+  }
+
+  async models(name) {
+    return fetch(this.modelsUrl + '?name=' + encodeURI(name), {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+        ...this.extraHeaders
+      },}).then(x => x.json())
   }
 
   /** 清空对话历史（保留 system） */
