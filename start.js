@@ -7,7 +7,7 @@ const chat = new Chat({
   url: process.env.URL,
   apiKey: process.env.KEY,
   model: process.env.MODEL,
-  modelsUrl: process.env.MODELS_URL,
+  modelsUrl: process.env.MODELS_URL
 })
 
 const baseConfig = {
@@ -27,6 +27,14 @@ const wsClient = new Lark.WSClient({
 wsClient.start({
   // 处理「接收消息」事件，事件类型为 im.message.receive_v1
   eventDispatcher: new Lark.EventDispatcher({}).register({
+    'card.action.trigger': async data => {
+      const {
+        operator: { open_id },
+        action: { value, form_value = {} }
+      } = data
+      console.log('Received card action:', data)
+      if (value.action === 'set_model') chat.model = value.model
+    },
     'im.message.receive_v1': async data => {
       const {
         event_id,
@@ -59,7 +67,7 @@ wsClient.start({
           responseContent = ''
 
           console.log(md_id)
-          const config2 = {
+          const config_stream_card = {
             schema: '2.0',
             config: {
               streaming_mode: true,
@@ -82,10 +90,9 @@ wsClient.start({
           const res = await client.cardkit.v1.card.create({
             data: {
               type: 'card_json',
-              data: JSON.stringify(config2)
+              data: JSON.stringify(config_stream_card)
             }
           })
-          console.log('res', res)
           cardId = res.data.card_id
         } catch (e) {
           console.log('catch')
@@ -98,7 +105,7 @@ wsClient.start({
           case 'cave':
             const game = new CaveGame(chat.clone())
             chatState.set(chat_id, game)
-            responseTitle = '洞穴游戏'
+            responseTitle = '洞穴游戏（' + chat.model + '）'
             responseContent = game.prompt()
             break
           default:
@@ -106,19 +113,48 @@ wsClient.start({
               const search = cmd.startsWith('models ')
                 ? cmd.slice('models '.length)
                 : ''
-              await chat.models(search).then(({ output: { models } }) => {
+              await chat.models(search).then(async ({ output: { models } }) => {
                 models = models
                   .filter(x => x.features.includes('web-search'))
                   .filter(x => x.published_time > '2026-05-20')
                 models.sort((a, b) =>
                   a.published_time < b.published_time ? -1 : 0
                 )
-                responseContent = models
-                  .map(
-                    x =>
-                      `${x.published_time.split(' ')[0]} ${x.name} ${x.model}`
-                  )
-                  .join('\n')
+                const elements = models.map(x => ({
+                  tag: 'button',
+                  text: {
+                    tag: 'plain_text',
+                    content: x.name
+                  },
+                  type: 'primary',
+                  width: 'default',
+                  size: 'medium',
+
+                  behaviors: [
+                    {
+                      type: 'callback',
+                      value: {
+                        action: 'set_model',
+                        model: x.model
+                      }
+                    }
+                  ]
+                }))
+
+                const config_models_card = {
+                  schema: '2.0',
+                  body: {
+                    elements
+                  }
+                }
+
+                const res = await client.cardkit.v1.card.create({
+                  data: {
+                    type: 'card_json',
+                    data: JSON.stringify(config_models_card)
+                  }
+                })
+                cardId = res.data.card_id
               })
               responseTitle = '模型列表'
             } else {
