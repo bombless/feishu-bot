@@ -32,7 +32,7 @@ class Chat {
   }
 
   async models(name) {
-    return fetch(this.modelsUrl + '?name=' + encodeURI(name), {
+    return fetch(this.modelsUrl + '?capabilities=TG&page_size=99&name=' + encodeURI(name), {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
