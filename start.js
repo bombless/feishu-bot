@@ -46,29 +46,30 @@ const numbers = {
   8: 'img_v3_0214i_607bd8f0-0449-4e20-98b0-8158f44b784g'
 }
 
-const board = (() => {
-  const ret = []
+const board = []
+function init_board() {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push('+')
     }
-    ret.push(line)
+    board[i] = line;
   }
-  return ret
-})()
+}
+init_board() 
 
-const mine_field = (() => {
-  const ret = []
+
+const mine_field = []
+function init_mine_field() {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push(Math.random() < 0.15)
     }
-    ret.push(line)
+    mine_field[i] = line
   }
-  return ret
-})()
+}
+init_mine_field()
 
 async function sendBoardCard (receive_id_type, receive_id) {
   const success = check_success()
@@ -136,6 +137,11 @@ wsClient.start({
       } = data
       console.log('Received card action:', data)
       if (value.action === 'set_model') chat.model = value.model
+      if (value.action === 'mine_restart') {
+        init_board()
+        init_mine_field()
+        return sendBoardCard('open_id', open_id)
+      }
       if (value.action === 'mine_position') {
         const i = value?.position?.[0]
         const j = value?.position?.[1]
