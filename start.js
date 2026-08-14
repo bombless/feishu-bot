@@ -128,25 +128,6 @@ function render_board () {
   return ret
 }
 
-function flat () {
-  const ret = []
-  for (const img_key of Object.values(numbers)) {
-    ret.push({
-      tag: 'interactive_container',
-      width: '48px',
-      height: '48px',
-      elements: [
-        ...render_board(),
-        {
-          tag: 'img',
-          img_key,
-          preview: false
-        }
-      ]
-    })
-  }
-  return ret
-}
 async function sendBoardCard (receive_id_type, receive_id) {
   const config_models_card = {
     schema: '2.0',
@@ -172,19 +153,41 @@ async function sendBoardCard (receive_id_type, receive_id) {
   console.log(res)
   const card_id = res.data.card_id
 
-  const content = JSON.stringify({
-    type: 'card',
-    data: { card_id }
-  })
+  const success = check_success()
+
+  const contentObject =
+    success === true || success === false
+      ? {
+          text: success ? '胜利！' : '失败！'
+        }
+      : {
+          type: 'card',
+          data: { card_id }
+        }
+
+  const content = JSON.stringify(contentObject)
 
   await client.im.v1.message.create({
     params: { receive_id_type },
     data: {
       receive_id,
       content,
-      msg_type: 'interactive'
+      msg_type: success === undefined ? 'interactive' : 'text'
     }
   })
+}
+
+function check_success () {
+  let all_good = true
+  for (let i = 0; i < 6; i += 1) {
+    for (let j = 0; j < 6; j += 1) {
+      if (board[i][j] === 'c') return false
+      if (!(board[i][j] !== '+' && mine_field[i][j])) {
+        all_good = false
+      }
+    }
+  }
+  return all_good ? true : undefined
 }
 
 wsClient.start({
