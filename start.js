@@ -2,6 +2,7 @@ require('dotenv').config()
 const Lark = require('@larksuiteoapi/node-sdk')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
+const MineInterface = require('./module_mine_interface')
 
 const chat = new Chat({
   url: process.env.URL,
@@ -9,6 +10,8 @@ const chat = new Chat({
   model: process.env.MODEL,
   modelsUrl: process.env.MODELS_URL
 })
+
+const mine_interface = new MineInterface
 
 const baseConfig = {
   appId: process.env.FEISHU_APP_ID,
@@ -67,93 +70,19 @@ const mine_field = (() => {
   return ret
 })()
 
-function render_line (line_number, line) {
-  const ret = []
-
-  for (let i = 0; i < line.length; i += 1) {
-    let img_key
-    switch (line[i]) {
-      case '+':
-        img_key = icon_untouched
-        break
-      case '-':
-        img_key = icon_empty
-        break
-      case 'c':
-        img_key = icon_cry
-        break
-      case 's':
-        img_key = icon_smile
-        break
-      default:
-        if (line[i] in numbers) {
-          img_key = numbers[line[i]]
-        }
-    }
-
-    ret.push({
-      tag: 'interactive_container',
-      width: '48px',
-      height: '48px',
-      behaviors: [
-        {
-          type: 'callback',
-          value: {
-            action: 'mine_position',
-            position: [line_number, i]
-          }
-        }
-      ],
-      elements: [
-        {
-          tag: 'img',
-          img_key,
-          preview: false
-        }
-      ]
-    })
-  }
-  return ret
-}
-
-function render_board () {
-  const ret = []
-  for (let i = 0; i < board.length; i += 1) {
-    ret.push({
-      tag: 'interactive_container',
-      direction: 'horizontal',
-      elements: render_line(i, board[i])
-    })
-  }
-  return ret
-}
-
 async function sendBoardCard (receive_id_type, receive_id) {
-  const config_models_card = {
-    schema: '2.0',
-    header: {
-      title: {
-        tag: 'plain_text',
-        content: '6×6扫雷游戏'
-      },
-      template: 'blue',
-      padding: '12px 8px 12px 8px'
-    },
-    body: {
-      elements: render_board()
-    }
-  }
+  const success = check_success()
+  const config_card = mine_interface.config_card(board, mine_field, success)
 
   const res = await client.cardkit.v1.card.create({
     data: {
       type: 'card_json',
-      data: JSON.stringify(config_models_card)
+      data: JSON.stringify(config_card)
     }
   })
   console.log(res)
   const card_id = res.data.card_id
 
-  const success = check_success()
 
   const contentObject =
     success === true || success === false
@@ -177,17 +106,18 @@ async function sendBoardCard (receive_id_type, receive_id) {
   })
 }
 
+
 function check_success () {
   let all_good = true
   for (let i = 0; i < 6; i += 1) {
     for (let j = 0; j < 6; j += 1) {
       if (board[i][j] === 'c') return false
-      if (!(board[i][j] !== '+' && mine_field[i][j])) {
-        all_good = false
+      if (board[i][j] === '+' && !mine_field[i][j]) {
+        return undefined
       }
     }
   }
-  return all_good ? true : undefined
+  return true
 }
 
 wsClient.start({
