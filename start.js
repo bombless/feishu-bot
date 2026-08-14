@@ -43,29 +43,27 @@ const numbers = {
   8: 'img_v3_0214i_607bd8f0-0449-4e20-98b0-8158f44b784g'
 }
 
-const board = (() => {
-  const ret = []
+const board = []
+function init_board() {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push('+')
     }
-    ret.push(line)
+    board[i] = line
   }
-  return ret
-})()
+}
 
-const mine_field = (() => {
-  const ret = []
+const mine_field = []
+function init_field() {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push(Math.random() < 0.15)
     }
-    ret.push(line)
+    mine_field[i] = line
   }
-  return ret
-})()
+}
 
 function render_line (line_number, line) {
   const ret = []
@@ -93,8 +91,9 @@ function render_line (line_number, line) {
 
     ret.push({
       tag: 'interactive_container',
-      width: '48px',
-      height: '48px',
+      width: '42px',
+      height: '42px',
+      padding: '0px 0px 0px 0px',
       behaviors: [
         {
           type: 'callback',
@@ -122,6 +121,8 @@ function render_board () {
     ret.push({
       tag: 'interactive_container',
       direction: 'horizontal',
+      padding: '0px 0px 0px 0px',
+      horizontal_spacing: '0px',
       elements: render_line(i, board[i])
     })
   }
@@ -140,6 +141,8 @@ async function sendBoardCard (receive_id_type, receive_id) {
       padding: '12px 8px 12px 8px'
     },
     body: {
+      vertical_spacing: '0px',
+      padding: '0px 0px 0px 0px',
       elements: render_board()
     }
   }
@@ -301,7 +304,9 @@ wsClient.start({
       } else {
         const cmd = JSON.parse(content).text.trim()
         switch (cmd) {
-          case 'h':
+          case 'mine':
+            init_board()
+            init_field()
             await sendBoardCard('chat_id', chat_id)
             return
           case 'cave':
@@ -365,6 +370,7 @@ wsClient.start({
 help 本帮助目录；
 cave 洞穴游戏；
 models 模型列表；
+mine 扫雷游戏;
 `
             }
             break
