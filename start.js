@@ -43,15 +43,6 @@ const numbers = {
   8: 'img_v3_0214i_607bd8f0-0449-4e20-98b0-8158f44b784g'
 }
 
-const images = [
-  'img_v3_0214i_e32d51e2-23e5-4044-826e-705fa1ee5bcg',
-  'img_v3_0214i_fe9dfd0a-5441-4d11-abdc-c04e4e19729g',
-  'img_v3_0214i_e9876c40-9e2f-4c8b-9541-5c405231ed5g',
-  'img_v3_0214i_260a403c-2281-4b61-8529-8ed3f9b9e8dg',
-  'img_v3_0214i_2cb99f78-c7bb-48a6-8de6-7c71afef414g',
-  'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g'
-]
-
 const board = (() => {
   const ret = []
   for (let i = 0; i < 6; i += 1) {
@@ -69,7 +60,7 @@ const mine_field = (() => {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
-      line.push(Math.random() < 0.2)
+      line.push(Math.random() < 0.15)
     }
     ret.push(line)
   }
