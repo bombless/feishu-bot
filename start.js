@@ -25,11 +25,22 @@ const wsClient = new Lark.WSClient({
   loggerLevel: Lark.LoggerLevel.debug
 })
 
-const example = {
-  schema: '2.0',
-  body: {
-    elements: []
-  }
+const icon_untouched = 'img_v3_0214i_58821f55-1368-4c11-85dd-4e4f862ee32g'
+const icon_empty = 'img_v3_0214i_6aa1c979-34cb-41c9-b2cc-fb725c8c9bcg'
+
+const icon_cry = 'img_v3_0214i_0b572b71-7cd8-4919-bca3-9ed18cea938g'
+
+const icon_smile = 'img_v3_0214i_3e28e27d-6fe6-4a2a-8d1b-95ef664f737g'
+
+const numbers = {
+  1: 'img_v3_0214i_e32d51e2-23e5-4044-826e-705fa1ee5bcg',
+  2: 'img_v3_0214i_fe9dfd0a-5441-4d11-abdc-c04e4e19729g',
+  3: 'img_v3_0214i_e9876c40-9e2f-4c8b-9541-5c405231ed5g',
+  4: 'img_v3_0214i_260a403c-2281-4b61-8529-8ed3f9b9e8dg',
+  5: 'img_v3_0214i_2cb99f78-c7bb-48a6-8de6-7c71afef414g',
+  6: 'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g',
+  7: 'img_v3_0214i_de41e45a-dc95-415b-8e42-6a64702b456g',
+  8: 'img_v3_0214i_607bd8f0-0449-4e20-98b0-8158f44b784g'
 }
 
 const images = [
@@ -40,13 +51,68 @@ const images = [
   'img_v3_0214i_2cb99f78-c7bb-48a6-8de6-7c71afef414g',
   'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g'
 ]
-function flat () {
+
+const board = (() => {
   const ret = []
-  for (const img_key of images) {
+  for (let i = 0; i < 6; i += 1) {
+    let line = []
+    for (let j = 0; j < 6; j += 1) {
+      line.push('+')
+    }
+    ret.push(line)
+  }
+  return ret
+})()
+
+const mine_field = (() => {
+  const ret = []
+  for (let i = 0; i < 6; i += 1) {
+    let line = []
+    for (let j = 0; j < 6; j += 1) {
+      line.push(Math.random() < 0.2)
+    }
+    ret.push(line)
+  }
+  return ret
+})()
+
+function render_line (line_number, line) {
+  const ret = []
+
+  for (let i = 0; i < line.length; i += 1) {
+    let img_key
+    switch (line[i]) {
+      case '+':
+        img_key = icon_untouched
+        break
+      case '-':
+        img_key = icon_empty
+        break
+      case 'c':
+        img_key = icon_cry
+        break
+      case 's':
+        img_key = icon_smile
+        break
+      default:
+        if (line[i] in numbers) {
+          img_key = numbers[line[i]]
+        }
+    }
+
     ret.push({
       tag: 'interactive_container',
       width: '48px',
       height: '48px',
+      behaviors: [
+        {
+          type: 'callback',
+          value: {
+            action: 'mine_position',
+            position: [line_number, i]
+          }
+        }
+      ],
       elements: [
         {
           tag: 'img',
@@ -58,7 +124,39 @@ function flat () {
   }
   return ret
 }
-async function sendDeepSeekCard (chat_id) {
+
+function render_board () {
+  const ret = []
+  for (let i = 0; i < board.length; i += 1) {
+    ret.push({
+      tag: 'interactive_container',
+      direction: 'horizontal',
+      elements: render_line(i, board[i])
+    })
+  }
+  return ret
+}
+
+function flat () {
+  const ret = []
+  for (const img_key of Object.values(numbers)) {
+    ret.push({
+      tag: 'interactive_container',
+      width: '48px',
+      height: '48px',
+      elements: [
+        ...render_board(),
+        {
+          tag: 'img',
+          img_key,
+          preview: false
+        }
+      ]
+    })
+  }
+  return ret
+}
+async function sendBoardCard (receive_id_type, receive_id) {
   const config_models_card = {
     schema: '2.0',
     header: {
@@ -70,716 +168,7 @@ async function sendDeepSeekCard (chat_id) {
       padding: '12px 8px 12px 8px'
     },
     body: {
-      elements: [
-        {
-          tag: 'interactive_container',
-          direction: 'horizontal',
-          elements: [
-            ...flat(),{
-              tag: 'button',
-              text: { tag: 'plain_text', content: '1' },
-              icon: {
-                tag: 'custom_icon',
-                img_key: 'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g'
-              }
-            }
-          ]
-        },
-        {
-          tag: 'button',
-          text: { tag: 'plain_text', content: '1' },
-          icon: {
-            tag: 'custom_icon',
-            img_key: 'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g'
-          }
-        },
-        {
-          tag: 'select_img',
-          name: 'select_img-1',
-          layout: 'trisect',
-          aspect_ratio: '1:1',
-          disabled: false,
-          disabled_tips: {
-            tag: 'plain_text',
-            content: '用户禁用提示文案'
-          },
-          options: [
-            {
-              img_key: 'img_v3_0214i_e32d51e2-23e5-4044-826e-705fa1ee5bcg',
-              value: 'picture1',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案1'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第一张图'
-              }
-            },
-            {
-              img_key: 'img_v3_0214i_fe9dfd0a-5441-4d11-abdc-c04e4e19729g',
-              value: 'picture2',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案2'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第二张图'
-              }
-            },
-            {
-              img_key: 'img_v3_0214i_e9876c40-9e2f-4c8b-9541-5c405231ed5g',
-              value: 'picture3',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案3'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第三张图'
-              }
-            },
-            {
-              img_key: 'img_v3_0214i_260a403c-2281-4b61-8529-8ed3f9b9e8dg',
-              value: 'picture4',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案4'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第四张图'
-              }
-            },
-            {
-              img_key: 'img_v3_0214i_2cb99f78-c7bb-48a6-8de6-7c71afef414g',
-              value: 'picture5',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案5'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第五张图'
-              }
-            },
-            {
-              img_key: 'img_v3_0214i_9c56d670-612a-4bf3-b43a-a8efbbc0128g',
-              value: 'picture6',
-              disabled: false,
-              disabled_tips: {
-                tag: 'plain_text',
-                content: '用户禁用提示文案6'
-              },
-              hover_tips: {
-                tag: 'plain_text',
-                content: '第六张图'
-              }
-            }
-          ]
-        },
-        // 第1行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 第2行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 第3行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 第4行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 第5行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 第6行
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '2px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [
-                {
-                  tag: 'button',
-
-                  type: 'default',
-                  size: 'small',
-                  width: 'fill',
-                  text: { tag: 'plain_text', content: '' }
-                }
-              ]
-            }
-          ]
-        },
-        // 图片组件
-        {
-          tag: 'img',
-          img_key: 'img_v3_0214i_412a0d2c-4322-484a-9b65-66ab8fbfb5eg',
-          corner_radius: '8px',
-          margin: '12px 0px 0px 0px'
-        }
-      ]
+      elements: render_board()
     }
   }
 
@@ -798,28 +187,13 @@ async function sendDeepSeekCard (chat_id) {
   })
 
   await client.im.v1.message.create({
-    params: { receive_id_type: 'chat_id' },
+    params: { receive_id_type },
     data: {
-      receive_id: chat_id,
+      receive_id,
       content,
       msg_type: 'interactive'
     }
   })
-
-  // 辅助函数：生成格子按钮（实际编码时需展开）
-  function gridButton (position, displayText) {
-    return {
-      tag: 'button',
-      text: displayText,
-      style: displayText === ' ' ? 'default' : 'primary', // 未点开为默认样式，已揭晓为强调色
-      size: 'large',
-      width: '100%',
-      action: {
-        type: 'callback',
-        value: { action: 'reveal_cell', position: position }
-      }
-    }
-  }
 }
 
 wsClient.start({
@@ -829,7 +203,7 @@ wsClient.start({
       const {
         operator_id: { open_id }
       } = data
-      await sendDeepSeekCard(open_id)
+      await sendBoardCard('open_id', open_id)
     },
     'card.action.trigger': async data => {
       const {
@@ -838,6 +212,33 @@ wsClient.start({
       } = data
       console.log('Received card action:', data)
       if (value.action === 'set_model') chat.model = value.model
+      if (value.action === 'mine_position') {
+        const i = value?.position?.[0]
+        const j = value?.position?.[1]
+
+        const borad_state = board?.[i]?.[j]
+        const mine_state = mine_field?.[i]?.[j]
+
+        console.log('borad_state', borad_state)
+
+        if (borad_state === '+') {
+          if (mine_state === true) {
+            board[i][j] = 'c'
+          } else {
+            let count = 0
+            for (let x = i - 1; x <= i + 1; x += 1) {
+              for (let y = j - 1; y <= j + 1; y += 1) {
+                if (x < 0 || x >= 6 || y < 0 || y >= 6) continue
+                if (mine_field[x][y]) count += 1
+              }
+            }
+            board[i][j] = count ? count : '-'
+          }
+        }
+        console.log('calling sendBoardCard', board)
+        await sendBoardCard('open_id', open_id)
+        console.log('called sendBoardCard')
+      }
     },
     'im.message.receive_v1': async data => {
       const {
@@ -907,7 +308,7 @@ wsClient.start({
         const cmd = JSON.parse(content).text.trim()
         switch (cmd) {
           case 'h':
-            await sendDeepSeekCard(chat_id)
+            await sendBoardCard('chat_id', chat_id)
             return
           case 'cave':
             const game = new CaveGame(chat.clone())
