@@ -1,15 +1,19 @@
 class MineInterface {
   constructor () {
     this.type = 'chatgpt'
+    this.id = +new Date
   }
   config_card (board, mine_field) {
-    return config_card_chatgpt(board, mine_field)
+    return config_card_chatgpt(board, mine_field, this.id)
+  }
+  update_card(board, mine_field) {
+    return update_card_chatgpt(board, mine_field, this.id)
   }
 }
 
 module.exports = MineInterface
 
-function config_card_chatgpt (board, mine_field) {
+function config_card_chatgpt (board, mine_field, id) {
   console.log('board', board)
   console.log('mine_field', mine_field)
   const elements = []
@@ -59,6 +63,60 @@ function config_card_chatgpt (board, mine_field) {
   elements.push({
     tag: 'hr'
   })
+
+  elements.push(card_content_chatgpt(board, mine_field))
+
+  elements.push({
+    tag: 'hr'
+  })
+
+  // 底部重新开始
+  elements.push({
+    tag: 'button',
+    element_id: 'mine_restart',
+    text: {
+      tag: 'plain_text',
+      content: '🔄 重新开始'
+    },
+    type: 'primary',
+    width: 'default',
+    size: 'medium',
+    behaviors: [
+      {
+        type: 'callback',
+        value: {
+          action: 'mine_restart'
+        }
+      }
+    ]
+  })
+
+  return {
+    schema: '2.0',
+    config: {
+      width_mode: 'compact'
+    },
+    header: {
+      title: {
+        tag: 'plain_text',
+        content: '💣 扫雷'
+      },
+      subtitle: {
+        tag: 'plain_text',
+        content: '6 × 6 · 扫雷游戏'
+      },
+      template: 'blue'
+    },
+    body: {
+      direction: 'vertical',
+      padding: '0px',
+      vertical_spacing: '0px',
+      elements
+    }
+  }
+}
+
+function card_content_chatgpt (board, mine_field) {
 
   const columns = []
 
@@ -115,59 +173,11 @@ function config_card_chatgpt (board, mine_field) {
       elements: column_elements
     })
   }
-  elements.push({
+  return {
     tag: 'column_set',
+    element_id: 'master_content',
     flex_mode: 'none',
     horizontal_spacing: '0px',
     columns
-  })
-
-  elements.push({
-    tag: 'hr'
-  })
-
-  // 底部重新开始
-  elements.push({
-    tag: 'button',
-    element_id: 'mine_restart',
-    text: {
-      tag: 'plain_text',
-      content: '🔄 重新开始'
-    },
-    type: 'primary',
-    width: 'default',
-    size: 'medium',
-    behaviors: [
-      {
-        type: 'callback',
-        value: {
-          action: 'mine_restart'
-        }
-      }
-    ]
-  })
-
-  return {
-    schema: '2.0',
-    config: {
-      width_mode: 'compact'
-    },
-    header: {
-      title: {
-        tag: 'plain_text',
-        content: '💣 扫雷'
-      },
-      subtitle: {
-        tag: 'plain_text',
-        content: '6 × 6 · 扫雷游戏'
-      },
-      template: 'blue'
-    },
-    body: {
-      direction: 'vertical',
-      padding: '0px',
-      vertical_spacing: '0px',
-      elements
-    }
   }
 }
