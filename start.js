@@ -73,7 +73,7 @@ init_mine_field()
 
 async function sendBoardCard (receive_id_type, receive_id) {
   const success = check_success()
-  const config_card = mine_interface.config_card(board, mine_field, success)
+  const config_card = mine_interface.config_card(board, mine_field)
 
   const res = await client.cardkit.v1.card.create({
     data: {

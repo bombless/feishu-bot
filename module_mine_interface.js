@@ -2,14 +2,14 @@ class MineInterface {
   constructor () {
     this.type = 'chatgpt'
   }
-  config_card (board, mine_field, success) {
-    return config_card_chatgpt(board, mine_field, success)
+  config_card (board, mine_field) {
+    return config_card_chatgpt(board, mine_field)
   }
 }
 
 module.exports = MineInterface
 
-function config_card_chatgpt (board, mine_field, success) {
+function config_card_chatgpt (board, mine_field) {
   console.log('board', board)
   console.log('mine_field', mine_field)
   const elements = []
