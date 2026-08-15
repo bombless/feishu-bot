@@ -44,7 +44,7 @@ const numbers = {
 }
 
 const board = []
-function init_board() {
+function init_board () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
@@ -55,7 +55,7 @@ function init_board() {
 }
 
 const mine_field = []
-function init_field() {
+function init_field () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
@@ -65,7 +65,7 @@ function init_field() {
   }
 }
 
-function render_line (line_number, line) {
+function render_line (line_number, line, disabled) {
   const ret = []
 
   for (let i = 0; i < line.length; i += 1) {
@@ -94,6 +94,7 @@ function render_line (line_number, line) {
       width: '42px',
       height: '42px',
       padding: '0px 0px 0px 0px',
+      disabled,
       behaviors: [
         {
           type: 'callback',
@@ -115,20 +116,39 @@ function render_line (line_number, line) {
   return ret
 }
 
-function render_board () {
+function render_board (disabled) {
   const ret = []
   for (let i = 0; i < board.length; i += 1) {
     ret.push({
       tag: 'interactive_container',
+      element_id: 'line' + i,
       direction: 'horizontal',
       padding: '0px 0px 0px 0px',
       horizontal_spacing: '0px',
-      elements: render_line(i, board[i])
+      elements: render_line(i, board[i], !!disabled)
     })
   }
   return ret
 }
 
+let card_id
+async function updateBoardLine (line_number, seq) {
+  const element = JSON.stringify({
+    tag: 'interactive_container',
+    element_id: 'line' + line_number,
+    direction: 'horizontal',
+    padding: '0px 0px 0px 0px',
+    horizontal_spacing: '0px',
+    elements: render_line(line_number, board[line_number])
+  })
+  await client.cardkit.v1.cardElement.update({
+    path: { element_id: 'line' + line_number, card_id },
+    data: {
+      element,
+      sequence: seq
+    }
+  })
+}
 async function sendBoardCard (receive_id_type, receive_id) {
   const config_models_card = {
     schema: '2.0',
@@ -154,7 +174,7 @@ async function sendBoardCard (receive_id_type, receive_id) {
     }
   })
   console.log(res)
-  const card_id = res.data.card_id
+  card_id = res.data.card_id
 
   const success = check_success()
 
@@ -193,6 +213,8 @@ function check_success () {
   return all_good ? true : undefined
 }
 
+let sequence = 0
+
 wsClient.start({
   // 处理「接收消息」事件，事件类型为 im.message.receive_v1
   eventDispatcher: new Lark.EventDispatcher({}).register({
@@ -210,6 +232,7 @@ wsClient.start({
       console.log('Received card action:', data)
       if (value.action === 'set_model') chat.model = value.model
       if (value.action === 'mine_position') {
+        sequence += 1
         const i = value?.position?.[0]
         const j = value?.position?.[1]
 
@@ -218,8 +241,11 @@ wsClient.start({
 
         console.log('borad_state', borad_state)
 
+        let failed = false
+
         if (borad_state === '+') {
           if (mine_state === true) {
+            failed = true
             board[i][j] = 'c'
           } else {
             let count = 0
@@ -232,9 +258,34 @@ wsClient.start({
             board[i][j] = count ? count : '-'
           }
         }
-        console.log('calling sendBoardCard', board)
-        await sendBoardCard('open_id', open_id)
-        console.log('called sendBoardCard')
+        let toast = undefined
+        if (failed) {
+          toast = {type: 'error', content: '失败了！'}
+        } else if (check_success() === true) {
+          toast = {type: 'success', content: '成功了！'}
+        }
+        return {
+          toast,
+          card: {
+            type: 'raw',
+            data: {
+              schema: '2.0',
+              header: {
+                title: {
+                  tag: 'plain_text',
+                  content: '6×6扫雷游戏'
+                },
+                template: 'blue',
+                padding: '12px 8px 12px 8px'
+              },
+              body: {
+                vertical_spacing: '0px',
+                padding: '0px 0px 0px 0px',
+                elements: render_board(toast)
+              }
+            }
+          }
+        }
       }
     },
     'im.message.receive_v1': async data => {
