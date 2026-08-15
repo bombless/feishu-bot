@@ -121,7 +121,6 @@ function render_board (disabled) {
   for (let i = 0; i < board.length; i += 1) {
     ret.push({
       tag: 'interactive_container',
-      element_id: 'line' + i,
       direction: 'horizontal',
       padding: '0px 0px 0px 0px',
       horizontal_spacing: '0px',
@@ -131,24 +130,6 @@ function render_board (disabled) {
   return ret
 }
 
-let card_id
-async function updateBoardLine (line_number, seq) {
-  const element = JSON.stringify({
-    tag: 'interactive_container',
-    element_id: 'line' + line_number,
-    direction: 'horizontal',
-    padding: '0px 0px 0px 0px',
-    horizontal_spacing: '0px',
-    elements: render_line(line_number, board[line_number])
-  })
-  await client.cardkit.v1.cardElement.update({
-    path: { element_id: 'line' + line_number, card_id },
-    data: {
-      element,
-      sequence: seq
-    }
-  })
-}
 async function sendBoardCard (receive_id_type, receive_id) {
   const config_models_card = {
     schema: '2.0',
@@ -178,15 +159,10 @@ async function sendBoardCard (receive_id_type, receive_id) {
 
   const success = check_success()
 
-  const contentObject =
-    success === true || success === false
-      ? {
-          text: success ? '胜利！' : '失败！'
-        }
-      : {
-          type: 'card',
-          data: { card_id }
-        }
+  const contentObject = {
+    type: 'card',
+    data: { card_id }
+  }
 
   const content = JSON.stringify(contentObject)
 
@@ -195,7 +171,7 @@ async function sendBoardCard (receive_id_type, receive_id) {
     data: {
       receive_id,
       content,
-      msg_type: success === undefined ? 'interactive' : 'text'
+      msg_type: 'interactive'
     }
   })
 }
@@ -213,7 +189,6 @@ function check_success () {
   return all_good ? true : undefined
 }
 
-let sequence = 0
 
 wsClient.start({
   // 处理「接收消息」事件，事件类型为 im.message.receive_v1
@@ -232,7 +207,6 @@ wsClient.start({
       console.log('Received card action:', data)
       if (value.action === 'set_model') chat.model = value.model
       if (value.action === 'mine_position') {
-        sequence += 1
         const i = value?.position?.[0]
         const j = value?.position?.[1]
 
@@ -261,10 +235,10 @@ wsClient.start({
         let toast = undefined
         let template = 'blue'
         if (failed) {
-          toast = {type: 'error', content: '失败了！'}
+          toast = { type: 'error', content: '失败了！' }
           template = 'red'
         } else if (check_success() === true) {
-          toast = {type: 'success', content: '成功了！'}
+          toast = { type: 'success', content: '成功了！' }
           template = 'green'
         }
         return {
