@@ -151,6 +151,7 @@ function button_content_chatgpt (board, i, j, seq) {
       : state === '+'
       ? '■'
       : ' ' + String(state) + ' '
+  if (seq) console.log('content is now', content)
 
   const button = {
     tag: 'button',
@@ -169,7 +170,7 @@ function button_content_chatgpt (board, i, j, seq) {
     ]
   }
 
-  console.log(button)
+  // console.log(button)
 
   // 未翻开、空白、数字、踩雷分别使用对应图片
   button.text = {

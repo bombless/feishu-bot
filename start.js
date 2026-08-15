@@ -82,7 +82,7 @@ async function updateBoard (open_id, i, j) {
       sequence: mine_interface.sequence
     }
   })
-  console.log('update', ret)
+  console.log('update-------------------------------------', ret)
 }
 
 async function sendBoardCard (receive_id_type, receive_id) {
