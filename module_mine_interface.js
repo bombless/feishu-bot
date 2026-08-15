@@ -1,13 +1,24 @@
 class MineInterface {
   constructor () {
     this.type = 'chatgpt'
-    this.id = +new Date
+    this.card_id = undefined
+    this.sequence = 0
+    this.element_id = 'master_content'
+  }
+  set_card_id (card_id) {
+    this.card_id = card_id
   }
   config_card (board, mine_field) {
-    return config_card_chatgpt(board, mine_field, this.id)
+    return config_card_chatgpt(board, mine_field)
   }
-  update_card(board, mine_field) {
-    return update_card_chatgpt(board, mine_field, this.id)
+  update_card (board, mine_field) {
+    return card_content_chatgpt(board, mine_field)
+  }
+  button_element_id (i, j) {
+    return button_element_id_chatgpt(i, j)
+  }
+  button_content (board, i, j) {
+    return button_content_chatgpt(board, i, j)
   }
 }
 
@@ -64,7 +75,7 @@ function config_card_chatgpt (board, mine_field, id) {
     tag: 'hr'
   })
 
-  elements.push(card_content_chatgpt(board, mine_field))
+  elements.push(card_content_chatgpt(board))
 
   elements.push({
     tag: 'hr'
@@ -116,8 +127,22 @@ function config_card_chatgpt (board, mine_field, id) {
   }
 }
 
-function card_content_chatgpt (board, mine_field) {
+function button_content_chatgpt (board, i, j) {
+  const state = board[i][j]
+  return state === 'c'
+    ? '💥'
+    : state === '-'
+    ? '   '
+    : state === '+'
+    ? '■'
+    : ' ' + String(state) + ' '
+}
 
+function button_element_id_chatgpt (i, j) {
+  return `mine_${i}_${j}`
+}
+
+function card_content_chatgpt (board) {
   const columns = []
 
   // 6 × 6 棋盘
@@ -125,16 +150,12 @@ function card_content_chatgpt (board, mine_field) {
     const column_elements = []
 
     for (let j = 0; j < 6; j += 1) {
-      const state = board[i][j]
-
       const button = {
         tag: 'button',
-        element_id: `mine_${i}_${j}`,
+        element_id: button_element_id_chatgpt(i, j),
         type: 'default',
         size: 'small',
         width: 'default',
-        padding: '0px 0px 0px 0px',
-        horizontal_spacing: '0px',
         behaviors: [
           {
             type: 'callback',
@@ -149,14 +170,7 @@ function card_content_chatgpt (board, mine_field) {
       // 未翻开、空白、数字、踩雷分别使用对应图片
       button.text = {
         tag: 'plain_text',
-        content:
-          state === 'c'
-            ? '💥'
-            : state === '-'
-            ? '   '
-            : state === '+'
-            ? '■'
-            : ' ' + String(state) + ' '
+        content: button_content_chatgpt(board, i, j)
       }
 
       column_elements.push(button)
@@ -175,7 +189,7 @@ function card_content_chatgpt (board, mine_field) {
   }
   return {
     tag: 'column_set',
-    element_id: 'master_content',
+    element_id: this.element_id,
     flex_mode: 'none',
     horizontal_spacing: '0px',
     columns

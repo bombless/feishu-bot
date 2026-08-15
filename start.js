@@ -11,7 +11,7 @@ const chat = new Chat({
   modelsUrl: process.env.MODELS_URL
 })
 
-const mine_interface = new MineInterface
+const mine_interface = new MineInterface()
 
 const baseConfig = {
   appId: process.env.FEISHU_APP_ID,
@@ -47,20 +47,19 @@ const numbers = {
 }
 
 const board = []
-function init_board() {
+function init_board () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push('+')
     }
-    board[i] = line;
+    board[i] = line
   }
 }
-init_board() 
-
+init_board()
 
 const mine_field = []
-function init_mine_field() {
+function init_mine_field () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
@@ -71,8 +70,21 @@ function init_mine_field() {
 }
 init_mine_field()
 
+async function updateBoard (open_id, i, j) {
+  const old_card_id = mine_interface.card_id
+  const conentJson = JSON.stringify(mine_interface.button_content(board, i, j))
+  const ret = await client.cardkit.v1.cardElement.update({
+    path: { card_id: old_card_id, element_id: mine_interface.button_element_id(i, j) },
+    data: {
+      element: conentJson,
+      sequence: ++mine_interface.sequence
+    }
+  })
+  console.log('update', ret)
+}
+
 async function sendBoardCard (receive_id_type, receive_id) {
-  const success = check_success()
+
   const config_card = mine_interface.config_card(board, mine_field)
 
   const res = await client.cardkit.v1.card.create({
@@ -83,8 +95,9 @@ async function sendBoardCard (receive_id_type, receive_id) {
   })
   console.log(res)
   const card_id = res.data.card_id
+  mine_interface.set_card_id(card_id)
 
-
+  const success = check_success()
   const contentObject =
     success === true || success === false
       ? {
@@ -106,7 +119,6 @@ async function sendBoardCard (receive_id_type, receive_id) {
     }
   })
 }
-
 
 function check_success () {
   let all_good = true
@@ -166,7 +178,7 @@ wsClient.start({
           }
         }
         console.log('calling sendBoardCard', board)
-        await sendBoardCard('open_id', open_id)
+        await updateBoard(open_id, i, j)
         console.log('called sendBoardCard')
       }
     },
