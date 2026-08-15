@@ -17,7 +17,7 @@ const first_prompt = `
 const model = process.env.MODEL
 
 class CaveGame {
-  constructor (chat) {
+  constructor (client, chat) {
     const system = `
 你是一个洞穴探索文字游戏机器人
 每次你要给用户两个选择，用户选择1或2之后你需要输出后面的场景以及对应的选择
@@ -31,10 +31,44 @@ class CaveGame {
     })
 
     this.api = chat
+    this.client = client
   }
 
-  prompt () {
-    return first_prompt
+  async prompt () {
+    const client = this.client
+    const config_card = {
+      schema: '2.0',
+      header: {
+        title: {
+          tag: 'plain_text',
+          content: '6×6扫雷游戏'
+        },
+        template: 'blue',
+        padding: '12px 8px 12px 8px'
+      },
+      body: {
+        vertical_spacing: '0px',
+        padding: '0px 0px 0px 0px',
+        elements: [{
+          tag: 'div',
+          text: {
+            content: first_prompt,
+            tag: 'plain_text'
+          }
+        }]
+      }
+    }
+
+    const res = await client.cardkit.v1.card.create({
+      data: {
+        type: 'card_json',
+        data: JSON.stringify(config_card)
+      }
+    })
+    console.log('client.cardkit.v1.card.create res', res)
+    this.card_id = res.data.card_id
+    console.log('return prompt()')
+    return this.card_id
   }
 
   ask (p) {

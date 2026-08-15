@@ -28,7 +28,7 @@ class MineGame {
 
   async prompt () {
     const client = this.client
-    const config_models_card = {
+    const config_card = {
       schema: '2.0',
       header: {
         title: {
@@ -48,28 +48,14 @@ class MineGame {
     const res = await client.cardkit.v1.card.create({
       data: {
         type: 'card_json',
-        data: JSON.stringify(config_models_card)
+        data: JSON.stringify(config_card)
       }
     })
-    console.log(res)
-    const card_id = res.data.card_id
+    console.log('client.cardkit.v1.card.create res', res)
+    this.card_id = res.data.card_id
+    console.log('return prompt()')
+    return this.card_id
 
-
-    const contentObject = {
-      type: 'card',
-      data: { card_id }
-    }
-
-    const content = JSON.stringify(contentObject)
-
-    await client.im.v1.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: this.chat_id,
-        content,
-        msg_type: 'interactive'
-      }
-    })
   }
 
   check_success () {

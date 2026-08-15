@@ -66,7 +66,7 @@ wsClient.start({
       eventLog.set(event_id, event_id)
       let responseTitle
       let responseContent
-      let cardId
+      let card_id
       let stream
       const md_id = 'md_1_' + +new Date()
 
@@ -108,7 +108,7 @@ wsClient.start({
               data: JSON.stringify(config_stream_card)
             }
           })
-          cardId = res.data.card_id
+          card_id = res.data.card_id
         } catch (e) {
           console.log('catch')
           responseTitle = '错误'
@@ -119,14 +119,15 @@ wsClient.start({
         switch (cmd) {
           case 'mine':
             const mine_game = new MineGame(client, chat_id)
+            console.log('mine_game got')
             chatState.set(chat_id, mine_game)
-            mine_game.prompt()
-            return
+            card_id = await mine_game.prompt()
+            console.log('got card_id', card_id)
+            break
           case 'cave':
-            const cave_game = new CaveGame(chat.clone())
+            const cave_game = new CaveGame(client, chat.clone())
             chatState.set(chat_id, cave_game)
-            responseTitle = '洞穴游戏（' + chat.model + '）'
-            responseContent = cave_game.prompt()
+            card_id = await cave_game.prompt()
             break
           default:
             if (cmd.startsWith('models')) {
@@ -174,7 +175,7 @@ wsClient.start({
                     data: JSON.stringify(config_models_card)
                   }
                 })
-                cardId = res.data.card_id
+                card_id = res.data.card_id
               })
               responseTitle = '模型列表'
             } else {
@@ -190,13 +191,13 @@ mine 扫雷游戏;
         }
       }
 
-      console.log(responseContent)
+      console.log('card_id', card_id)
       // 示例操作：接收消息后，调用「发送消息」API 进行消息回复。
       let cardContent
-      if (cardId) {
+      if (card_id) {
         cardContent = JSON.stringify({
           type: 'card',
-          data: { card_id: cardId }
+          data: { card_id }
         })
       } else {
         cardContent = Lark.messageCard.defaultCard({
@@ -204,6 +205,7 @@ mine 扫雷游戏;
           content: responseContent
         })
       }
+      console.log('card_id', card_id)
       await client.im.v1.message.reply({
         path: {
           message_id
@@ -219,7 +221,7 @@ mine 扫雷游戏;
         let sequence = 0
         for await (const piece of stream) {
           await client.cardkit.v1.cardElement.content({
-            path: { card_id: cardId, element_id: md_id },
+            path: { card_id, element_id: md_id },
             data: {
               content: piece,
               sequence: ++sequence
