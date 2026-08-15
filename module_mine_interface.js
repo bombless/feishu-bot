@@ -3,28 +3,42 @@ class MineInterface {
     this.type = 'chatgpt'
     this.card_id = undefined
     this.sequence = 0
-    this.element_id = 'master_content'
+    this.version_matrix = init_version_matrix()
+
   }
   set_card_id (card_id) {
     this.card_id = card_id
   }
   config_card (board, mine_field) {
-    return config_card_chatgpt(board, mine_field)
+    return config_card_chatgpt(board, mine_field, this.sequence)
   }
-  update_card (board, mine_field) {
-    return card_content_chatgpt(board, mine_field)
+  update_card (board) {
+    return card_content_chatgpt(board, this.sequence)
   }
   button_element_id (i, j) {
-    return button_element_id_chatgpt(i, j)
+    return button_element_id_chatgpt(i, j, this.version_matrix[i][j])
   }
   button_content (board, i, j) {
-    return button_content_chatgpt(board, i, j)
+    this.version_matrix[i][j] = this.sequence
+    return button_content_chatgpt(board, i, j, this.sequence)
   }
 }
 
 module.exports = MineInterface
 
-function config_card_chatgpt (board, mine_field, id) {
+function init_version_matrix() {
+  const ret = [];
+  for (let i = 0; i < 6; i += 1) {
+    const line = [];
+    for (let j = 0; j < 6; j += 1) {
+      line[j] = 0;
+    }
+    ret[i] = line
+  }
+  return ret;
+}
+
+function config_card_chatgpt (board, mine_field, seq) {
   console.log('board', board)
   console.log('mine_field', mine_field)
   const elements = []
@@ -75,7 +89,7 @@ function config_card_chatgpt (board, mine_field, id) {
     tag: 'hr'
   })
 
-  elements.push(card_content_chatgpt(board))
+  elements.push(card_content_chatgpt(board, seq))
 
   elements.push({
     tag: 'hr'
@@ -127,22 +141,49 @@ function config_card_chatgpt (board, mine_field, id) {
   }
 }
 
-function button_content_chatgpt (board, i, j) {
+function button_content_chatgpt (board, i, j, seq) {
   const state = board[i][j]
-  return state === 'c'
-    ? '💥'
-    : state === '-'
-    ? '   '
-    : state === '+'
-    ? '■'
-    : ' ' + String(state) + ' '
+  const content =
+    state === 'c'
+      ? '💥'
+      : state === '-'
+      ? '   '
+      : state === '+'
+      ? '■'
+      : ' ' + String(state) + ' '
+
+  const button = {
+    tag: 'button',
+    element_id: button_element_id_chatgpt(i, j, seq),
+    type: 'default',
+    size: 'small',
+    width: 'default',
+    behaviors: [
+      {
+        type: 'callback',
+        value: {
+          action: 'mine_position',
+          position: [i, j]
+        }
+      }
+    ]
+  }
+
+  console.log(button)
+
+  // 未翻开、空白、数字、踩雷分别使用对应图片
+  button.text = {
+    tag: 'plain_text',
+    content
+  }
+  return button
 }
 
-function button_element_id_chatgpt (i, j) {
-  return `mine_${i}_${j}`
+function button_element_id_chatgpt (i, j, seq) {
+  return `mine_${i}_${j}_${seq}`
 }
 
-function card_content_chatgpt (board) {
+function card_content_chatgpt (board, seq) {
   const columns = []
 
   // 6 × 6 棋盘
@@ -150,29 +191,7 @@ function card_content_chatgpt (board) {
     const column_elements = []
 
     for (let j = 0; j < 6; j += 1) {
-      const button = {
-        tag: 'button',
-        element_id: button_element_id_chatgpt(i, j),
-        type: 'default',
-        size: 'small',
-        width: 'default',
-        behaviors: [
-          {
-            type: 'callback',
-            value: {
-              action: 'mine_position',
-              position: [i, j]
-            }
-          }
-        ]
-      }
-
-      // 未翻开、空白、数字、踩雷分别使用对应图片
-      button.text = {
-        tag: 'plain_text',
-        content: button_content_chatgpt(board, i, j)
-      }
-
+      const button = button_content_chatgpt(board, i, j, seq)
       column_elements.push(button)
     }
 
@@ -189,7 +208,6 @@ function card_content_chatgpt (board) {
   }
   return {
     tag: 'column_set',
-    element_id: this.element_id,
     flex_mode: 'none',
     horizontal_spacing: '0px',
     columns

@@ -72,12 +72,14 @@ init_mine_field()
 
 async function updateBoard (open_id, i, j) {
   const old_card_id = mine_interface.card_id
+  const old_element_id = mine_interface.button_element_id(i, j)
+  mine_interface.sequence += 1
   const conentJson = JSON.stringify(mine_interface.button_content(board, i, j))
   const ret = await client.cardkit.v1.cardElement.update({
-    path: { card_id: old_card_id, element_id: mine_interface.button_element_id(i, j) },
+    path: { card_id: old_card_id, element_id: old_element_id },
     data: {
       element: conentJson,
-      sequence: ++mine_interface.sequence
+      sequence: mine_interface.sequence
     }
   })
   console.log('update', ret)
