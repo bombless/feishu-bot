@@ -75,6 +75,8 @@ function config_card_chatgpt (board, mine_field, success) {
         type: 'default',
         size: 'small',
         width: 'default',
+        padding: '0px 0px 0px 0px',
+        horizontal_spacing: '0px',
         behaviors: [
           {
             type: 'callback',
@@ -92,16 +94,19 @@ function config_card_chatgpt (board, mine_field, success) {
         content: state === 'c'
           ? '💥'
           : state === '-'
-            ? ' '
+            ? '   '
             : state === '+'
               ? '■'
-              : String(state)
+              : ' ' + String(state) + ' '
       }
 
       columns.push({
         tag: 'column',
-        width: 'weighted',
+        width: '8px',
         vertical_align: 'center',
+        padding: '0px',
+        margin: '0px',
+        horizontal_spacing: '0px',
         elements: [button]
       })
     }
@@ -109,7 +114,7 @@ function config_card_chatgpt (board, mine_field, success) {
     elements.push({
       tag: 'column_set',
       flex_mode: 'none',
-      horizontal_spacing: 'small',
+      horizontal_spacing: '0px',
       columns
     })
   }
@@ -158,7 +163,8 @@ function config_card_chatgpt (board, mine_field, success) {
     },
     body: {
       direction: 'vertical',
-      padding: '12px',
+      padding: '0px',
+      vertical_spacing: '0px',
       elements
     }
   }
