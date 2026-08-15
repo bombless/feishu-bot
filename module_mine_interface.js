@@ -1,19 +1,17 @@
 class MineInterface {
-    constructor() {
-        this.type = 'chatgpt'
-
-    }
-    config_card(board, mine_field, success) {
-        return config_card_chatgpt(board, mine_field, success)
-    }
+  constructor () {
+    this.type = 'chatgpt'
+  }
+  config_card (board, mine_field, success) {
+    return config_card_chatgpt(board, mine_field, success)
+  }
 }
 
 module.exports = MineInterface
 
-
 function config_card_chatgpt (board, mine_field, success) {
-    console.log('board', board)
-    console.log('mine_field', mine_field)
+  console.log('board', board)
+  console.log('mine_field', mine_field)
   const elements = []
 
   // 顶部状态
@@ -62,9 +60,11 @@ function config_card_chatgpt (board, mine_field, success) {
     tag: 'hr'
   })
 
+  const columns = []
+
   // 6 × 6 棋盘
   for (let i = 0; i < 6; i += 1) {
-    const columns = []
+    const column_elements = []
 
     for (let j = 0; j < 6; j += 1) {
       const state = board[i][j]
@@ -91,38 +91,40 @@ function config_card_chatgpt (board, mine_field, success) {
       // 未翻开、空白、数字、踩雷分别使用对应图片
       button.text = {
         tag: 'plain_text',
-        content: state === 'c'
-          ? '💥'
-          : state === '-'
+        content:
+          state === 'c'
+            ? '💥'
+            : state === '-'
             ? '   '
             : state === '+'
-              ? '■'
-              : ' ' + String(state) + ' '
+            ? '■'
+            : ' ' + String(state) + ' '
       }
 
-      columns.push({
-        tag: 'column',
-        width: '8px',
-        vertical_align: 'center',
-        padding: '0px',
-        margin: '0px',
-        horizontal_spacing: '0px',
-        elements: [button]
-      })
+      column_elements.push(button)
     }
 
-    elements.push({
-      tag: 'column_set',
-      flex_mode: 'none',
+    columns.push({
+      tag: 'column',
+      width: '8px',
+      vertical_align: 'center',
+      padding: '0px',
+      margin: '0px',
       horizontal_spacing: '0px',
-      columns
+      direction: 'horizontal',
+      elements: column_elements
     })
   }
+  elements.push({
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: '0px',
+    columns
+  })
 
   elements.push({
     tag: 'hr'
   })
-
 
   // 底部重新开始
   elements.push({
