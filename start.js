@@ -259,10 +259,13 @@ wsClient.start({
           }
         }
         let toast = undefined
+        let template = 'blue'
         if (failed) {
           toast = {type: 'error', content: '失败了！'}
+          template = 'red'
         } else if (check_success() === true) {
           toast = {type: 'success', content: '成功了！'}
+          template = 'green'
         }
         return {
           toast,
@@ -275,7 +278,7 @@ wsClient.start({
                   tag: 'plain_text',
                   content: '6×6扫雷游戏'
                 },
-                template: 'blue',
+                template,
                 padding: '12px 8px 12px 8px'
               },
               body: {
