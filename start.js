@@ -43,7 +43,7 @@ wsClient.start({
       if (value.action === 'cave') {
         const game = chatState.get(open_chat_id)
         const card = game.ask(value.choice)
-        console.log('card', card.body.elements[0].content)
+        console.log('card', card.body.elements)
         return {card: {data: card, type: 'raw'}}
       }
     },

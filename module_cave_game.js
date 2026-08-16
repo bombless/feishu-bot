@@ -141,11 +141,21 @@ class CaveGame {
       1: match[1],
       2: match[2]
     }
-    let markdown = last_message.replace(reOptions, '') + `\n<font color='green'>${options[p]}</font>\n`
+    let markdown =
+      last_message.replace(reOptions, '') +
+      `\n你选择：<font color='green'>${options[p]}</font>\n`
     const sq = ++this.sequence
     const md_id = 'md_' + +new Date()
     const config_stream_card = {
       schema: '2.0',
+      header: {
+        title: {
+          tag: 'plain_text',
+          content: '洞穴游戏（' + this.api.model + '）'
+        },
+        template: 'blue',
+        padding: '12px 8px 12px 8px'
+      },
       config: {
         streaming_mode: true,
         streaming_config: {
@@ -177,20 +187,22 @@ class CaveGame {
           type: 'card',
           data: { card_id }
         })
-        this.client.im.v1.message.reply({
-          path: {
-            message_id: this.message_id
-          },
-          data: {
-            receive_id: this.chat_id,
-            content,
-            msg_type: 'interactive'
-          }
-        }).then(res => {
-          console.log('res', res)
-          const message_id = res?.data?.message_id
-          if (message_id) this.message_id = message_id
-        })
+        this.client.im.v1.message
+          .reply({
+            path: {
+              message_id: this.message_id
+            },
+            data: {
+              receive_id: this.chat_id,
+              content,
+              msg_type: 'interactive'
+            }
+          })
+          .then(res => {
+            console.log('res', res)
+            const message_id = res?.data?.message_id
+            if (message_id) this.message_id = message_id
+          })
         let reply = ''
         for await (const piece of api.ask(p)) {
           reply += piece.slice(1)
@@ -206,6 +218,14 @@ class CaveGame {
             }
           })
         }
+        this.client.cardkit.v1.card.settings({
+          path: {card_id},
+          data: {
+            settings:
+              '{"config":{"streaming_mode":false}}',
+            sequence: ++this.sequence
+          }
+        })
       })
     return {
       schema: '2.0',
