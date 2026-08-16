@@ -134,21 +134,14 @@ class CaveGame {
 
   ask (p) {
     const api = this.api
-    // console.log(api)
-    const options = {}
-    let markdown = ''
     const reOptions = /\n你选择.*\n1\. ?(.+)\n2\. ?(.+)/
-    for (const { role, content } of api.messages) {
-      if (role === 'assistant' && reOptions.test(content)) {
-        const match = content.match(reOptions)
-        markdown += content.replace(reOptions, '')
-        options[1] = match[1]
-        options[2] = match[2]
-      }
-      if (role !== 'user' || !['1', '2'].includes(content)) continue
-      markdown += `\n<font color='green'>${options[content]}</font>\n`
+    const last_message = api.messages[api.messages.length - 1].content
+    const match = last_message.match(reOptions)
+    const options = {
+      1: match[1],
+      2: match[2]
     }
-    markdown += `\n<font color='green'>${options[p]}</font>\n`
+    let markdown = last_message.replace(reOptions, '') + `\n<font color='green'>${options[p]}</font>\n`
     const sq = ++this.sequence
     const md_id = 'md_' + +new Date()
     const config_stream_card = {

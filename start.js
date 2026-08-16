@@ -74,6 +74,7 @@ wsClient.start({
       }
 
       if (chatState.get(chat_id)) {
+        console.log('???')
         try {
           const modu = chatState.get(chat_id)
           stream = modu.ask(msg)()
@@ -126,6 +127,7 @@ wsClient.start({
           case 'cave':
             const cave_game = new CaveGame(client, chat.clone())
             chatState.set(chat_id, cave_game)
+            console.log('chatState.set cave_game')
             card_id = await cave_game.prompt()
             break
           default:
