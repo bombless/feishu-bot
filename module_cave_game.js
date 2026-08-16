@@ -203,10 +203,29 @@ class CaveGame {
             if (message_id) this.message_id = message_id
           })
         let reply = ''
+        let next_update_time = +new Date
+        let last_update_length = 0
         for await (const piece of api.ask(p)) {
           reply += piece.slice(1)
 
-          this.client.cardkit.v1.cardElement.content({
+          if (+new Date < next_update_time) continue
+
+          next_update_time = 200 + +new Date
+          last_update_length = reply.length
+
+          await this.client.cardkit.v1.cardElement.content({
+            path: {
+              element_id: md_id,
+              card_id
+            },
+            data: {
+              content: reply,
+              sequence: ++this.sequence
+            }
+          })
+        }
+        if (last_update_length < reply.length) {
+          await this.client.cardkit.v1.cardElement.content({
             path: {
               element_id: md_id,
               card_id
