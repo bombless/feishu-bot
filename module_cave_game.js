@@ -192,7 +192,6 @@ class CaveGame {
               message_id: this.message_id
             },
             data: {
-              receive_id: this.chat_id,
               content,
               msg_type: 'interactive'
             }
