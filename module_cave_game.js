@@ -199,7 +199,7 @@ class CaveGame {
             }
           })
           .then(res => {
-            console.log('res', res)
+            // console.log('res', res)
             const message_id = res?.data?.message_id
             if (message_id) this.message_id = message_id
           })
@@ -218,7 +218,7 @@ class CaveGame {
             }
           })
         }
-        this.client.cardkit.v1.card.settings({
+        const setting = await this.client.cardkit.v1.card.settings({
           path: {card_id},
           data: {
             settings:
@@ -226,6 +226,7 @@ class CaveGame {
             sequence: ++this.sequence
           }
         })
+        console.log('setting', setting)
       })
     return {
       schema: '2.0',
