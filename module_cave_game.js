@@ -134,7 +134,7 @@ class CaveGame {
 
   ask (p) {
     const api = this.api
-    const reOptions = /\n你选择.*\n1\. ?(.+)\n2\. ?(.+)/
+    const reOptions = /\n1\. ?(.+)\n2\. ?(.+)/
     const last_message = api.messages[api.messages.length - 1].content
     const match = last_message.match(reOptions)
     const options = {
