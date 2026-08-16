@@ -35,7 +35,7 @@ wsClient.start({
         action: { value, form_value = {} },
         context: { open_chat_id }
       } = data
-      console.log('Received card action:', data)
+      // console.log('Received card action:', data)
       if (value.action === 'set_model') chat.model = value.model
       if (value.action === 'mine_position') {
         return chatState.get(open_chat_id).chat(value)
@@ -43,7 +43,7 @@ wsClient.start({
       if (value.action === 'cave') {
         const game = chatState.get(open_chat_id)
         const card = game.ask(value.choice)
-        console.log('card', card.body.elements)
+        // console.log('card', card.body.elements)
         return { card: { data: card, type: 'raw' } }
       }
     },
@@ -53,7 +53,7 @@ wsClient.start({
         message: { chat_id, content, create_time, message_id }
       } = data
 
-      console.log('im.message.receive_v1', data)
+      // console.log('im.message.receive_v1', data)
 
       if (create_time + 10000 < +new Date()) {
         return // 时间太久远了
@@ -145,7 +145,7 @@ mine 扫雷游戏;
           break
       }
 
-      console.log('card_id', card_id)
+      // console.log('card_id', card_id)
       // 示例操作：接收消息后，调用「发送消息」API 进行消息回复。
       let cardContent
       if (card_id) {
@@ -159,7 +159,7 @@ mine 扫雷游戏;
           content: responseContent
         })
       }
-      console.log('card_id', card_id)
+      // console.log('card_id', card_id)
       const ret = await client.im.v1.message.reply({
         path: {
           message_id
