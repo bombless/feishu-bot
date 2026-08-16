@@ -4,7 +4,6 @@ const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
 
-
 const chat = new Chat({
   url: process.env.URL,
   apiKey: process.env.KEY,
@@ -27,17 +26,9 @@ const wsClient = new Lark.WSClient({
   loggerLevel: Lark.LoggerLevel.debug
 })
 
-
-
 wsClient.start({
   // 处理「接收消息」事件，事件类型为 im.message.receive_v1
   eventDispatcher: new Lark.EventDispatcher({}).register({
-    'im.chat.access_event.bot_p2p_chat_entered_v1': async data => {
-      const {
-        operator_id: { open_id }
-      } = data
-      await sendBoardCard('open_id', open_id)
-    },
     'card.action.trigger': async data => {
       const {
         operator: { open_id },
@@ -49,12 +40,20 @@ wsClient.start({
       if (value.action === 'mine_position') {
         return chatState.get(open_chat_id).chat(value)
       }
+      if (value.action === 'cave') {
+        const game = chatState.get(open_chat_id)
+        const card = game.ask(value.choice)
+        console.log('card', card.body.elements[0].content)
+        return {card: {data: card, type: 'raw'}}
+      }
     },
     'im.message.receive_v1': async data => {
       const {
         event_id,
         message: { chat_id, content, create_time, message_id }
       } = data
+
+      console.log('im.message.receive_v1', data)
 
       if (create_time + 10000 < +new Date()) {
         return // 时间太久远了
@@ -206,7 +205,7 @@ mine 扫雷游戏;
         })
       }
       console.log('card_id', card_id)
-      await client.im.v1.message.reply({
+      const ret = await client.im.v1.message.reply({
         path: {
           message_id
         },
@@ -216,6 +215,13 @@ mine 扫雷游戏;
           msg_type: 'interactive'
         }
       })
+      console.log('ret', ret)
+      const new_message_id = ret?.data?.message_id;
+      const modu = chatState.get(chat_id)
+      if (typeof modu?.setMessageId === 'function') {
+        modu.setMessageId(new_message_id)
+      }
+
       if (stream) {
         console.log('开始stream')
         let sequence = 0
