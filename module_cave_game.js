@@ -169,8 +169,7 @@ class CaveGame {
           {
             tag: 'markdown',
             element_id: md_id
-          },
-          columnSetOptions
+          }
         ]
       }
     }
@@ -219,14 +218,17 @@ class CaveGame {
           })
         }
         const setting = await this.client.cardkit.v1.card.settings({
-          path: {card_id},
+          path: { card_id },
           data: {
-            settings:
-              '{"config":{"streaming_mode":false}}',
+            settings: '{"config":{"streaming_mode":false}}',
             sequence: ++this.sequence
           }
         })
         console.log('setting', setting)
+        this.client.cardkit.v1.cardElement.create({
+          path: { card_id },
+          data: { type: 'append', elements: JSON.stringify([columnSetOptions]), sequence: ++this.sequence }
+        })
       })
     return {
       schema: '2.0',
