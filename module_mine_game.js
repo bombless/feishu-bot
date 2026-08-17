@@ -64,23 +64,16 @@ class MineGame {
     for (let i = 0; i < 6; i += 1) {
       for (let j = 0; j < 6; j += 1) {
         if (board[i][j] === 'c') return false
-        if (!(board[i][j] !== '+' && this.mine_field[i][j])) {
-          all_good = false
-        }
+        if (board[i][j] === '+' && !this.mine_field[i][j]) return undefined
       }
     }
-    return all_good ? true : undefined
+    return true
   }
 
-  chat(value) {
-        const i = value?.position?.[0]
-        const j = value?.position?.[1]
-
+  reveal(i, j) {
         const borad_state = this.board?.[i]?.[j]
         const mine_state = this.mine_field?.[i]?.[j]
-
-        console.log('borad_state', borad_state)
-
+        
         let failed = false
 
         if (borad_state === '+') {
@@ -96,8 +89,26 @@ class MineGame {
               }
             }
             this.board[i][j] = count ? count : '-'
+            if (!count) {
+                for (let x = -1; x <= 1; x += 1) {
+                    for (let y = -1; y <= 1; y += 1) {
+                        if (!x && !y) continue
+                        this.reveal(i + x, j + y)
+                    }
+                }
+            }
           }
         }
+        return failed
+
+  }
+
+  chat(value) {
+        const i = value?.position?.[0]
+        const j = value?.position?.[1]
+
+
+        let failed = this.reveal(i, j)
         let toast = undefined
         let template = 'blue'
         if (failed) {
