@@ -204,7 +204,6 @@ wsClient.start({
           responseTitle = '请选择'
           responseContent = ''
 
-          console.log(md_id)
           const config_stream_card = {
             schema: '2.0',
             config: {
