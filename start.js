@@ -11,7 +11,7 @@ const chat = new Chat({
   modelsUrl: process.env.MODELS_URL
 })
 
-const mine_interface = new MineInterface
+const mine_interface = new MineInterface()
 
 const baseConfig = {
   appId: process.env.FEISHU_APP_ID,
@@ -47,20 +47,19 @@ const numbers = {
 }
 
 const board = []
-function init_board() {
+function init_board () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
       line.push('+')
     }
-    board[i] = line;
+    board[i] = line
   }
 }
-init_board() 
-
+init_board()
 
 const mine_field = []
-function init_mine_field() {
+function init_mine_field () {
   for (let i = 0; i < 6; i += 1) {
     let line = []
     for (let j = 0; j < 6; j += 1) {
@@ -71,42 +70,46 @@ function init_mine_field() {
 }
 init_mine_field()
 
-async function sendBoardCard (receive_id_type, receive_id) {
+function sendBoardCard (receive_id_type, receive_id) {
   const success = check_success()
   const config_card = mine_interface.config_card(board, mine_field)
+  if (!receive_id_type) {
+    return { card: { data: config_card, type: 'raw' } }
+  }
 
-  const res = await client.cardkit.v1.card.create({
-    data: {
-      type: 'card_json',
-      data: JSON.stringify(config_card)
-    }
-  })
-  console.log(res)
-  const card_id = res.data.card_id
+  return client.cardkit.v1.card
+    .create({
+      data: {
+        type: 'card_json',
+        data: JSON.stringify(config_card)
+      }
+    })
+    .then(res => {
+      console.log(res)
+      const card_id = res.data.card_id
 
+      const contentObject =
+        success === true || success === false
+          ? {
+              text: success ? '胜利！' : '失败！'
+            }
+          : {
+              type: 'card',
+              data: { card_id }
+            }
 
-  const contentObject =
-    success === true || success === false
-      ? {
-          text: success ? '胜利！' : '失败！'
+      const content = JSON.stringify(contentObject)
+
+      return client.im.v1.message.create({
+        params: { receive_id_type },
+        data: {
+          receive_id,
+          content,
+          msg_type: success === undefined ? 'interactive' : 'text'
         }
-      : {
-          type: 'card',
-          data: { card_id }
-        }
-
-  const content = JSON.stringify(contentObject)
-
-  await client.im.v1.message.create({
-    params: { receive_id_type },
-    data: {
-      receive_id,
-      content,
-      msg_type: success === undefined ? 'interactive' : 'text'
-    }
-  })
+      })
+    })
 }
-
 
 function check_success () {
   let all_good = true
@@ -130,7 +133,7 @@ wsClient.start({
       } = data
       await sendBoardCard('open_id', open_id)
     },
-    'card.action.trigger': async data => {
+    'card.action.trigger': data => {
       const {
         operator: { open_id },
         action: { value, form_value = {} }
@@ -165,9 +168,9 @@ wsClient.start({
             board[i][j] = count ? count : '-'
           }
         }
-        console.log('calling sendBoardCard', board)
-        await sendBoardCard('open_id', open_id)
-        console.log('called sendBoardCard')
+        const ret = sendBoardCard()
+        console.log(ret.card.data.body.elements[2].columns[0].elements[0])
+        return { ...ret, toast: { type: 'info', content: 'hi' } }
       }
     },
     'im.message.receive_v1': async data => {
@@ -176,7 +179,7 @@ wsClient.start({
         message: { chat_id, content, create_time, message_id }
       } = data
 
-      if (create_time + 10000 < +new Date()) {
+      if (create_time * 1000 + 10000 < +new Date()) {
         return // 时间太久远了
       }
 
@@ -334,12 +337,29 @@ models 模型列表；
       if (stream) {
         console.log('开始stream')
         let sequence = 0
-        for await (const piece of stream) {
-          await client.cardkit.v1.cardElement.content({
-            path: { card_id: cardId, element_id: md_id },
+        try {
+          for await (const piece of stream) {
+            await client.cardkit.v1.cardElement.content({
+              path: { card_id: cardId, element_id: md_id },
+              data: {
+                content: piece,
+                sequence: ++sequence
+              }
+            })
+          }
+        } catch (e) {
+          cardContent = Lark.messageCard.defaultCard({
+            title: '错误',
+            content: e.toString()
+          })
+          await client.im.v1.message.reply({
+            path: {
+              message_id
+            },
             data: {
-              content: piece,
-              sequence: ++sequence
+              receive_id: chat_id,
+              content: cardContent,
+              msg_type: 'interactive'
             }
           })
         }

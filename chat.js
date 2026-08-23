@@ -75,6 +75,16 @@ class Chat {
 
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => '')
+      console.log('!!', text)
+      let error
+      try {
+        const json = JSON.parse(text);
+        if (json && json.error && json.error.code === 'insufficient_quota') {
+          error = 'insufficient_quota'
+        }
+      }
+      catch {}
+      if (error) throw error
       throw new Error(`Chat request failed ${resp.status}: ${text}`)
     }
 
@@ -103,6 +113,7 @@ class Chat {
 
         try {
           const json = JSON.parse(data);
+          console.warn(json)
           
           const choice = json?.choices?.[0];
           const delta = choice?.delta;
