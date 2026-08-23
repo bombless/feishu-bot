@@ -348,20 +348,56 @@ models 模型列表；
             })
           }
         } catch (e) {
-          cardContent = Lark.messageCard.defaultCard({
-            title: '错误',
-            content: e.toString()
-          })
-          await client.im.v1.message.reply({
-            path: {
-              message_id
-            },
-            data: {
-              receive_id: chat_id,
-              content: cardContent,
-              msg_type: 'interactive'
-            }
-          })
+          if (cardId) {
+            await client.cardkit.v1.card.update({
+              path: {
+                card_id: cardId
+              },
+              data: {
+                sequence: 1,
+                card: {
+                  type: 'card_json',
+                  data: JSON.stringify({
+                    schema: '2.0',
+                    header: {
+                      template: 'red',
+                      title: {
+                        tag: 'plain_text',
+                        content: '错误'
+                      }
+                    },
+                    body: {
+                      elements: [
+                        {
+                          tag: 'div',
+                          text: {
+                            tag: 'plain_text',
+                            text_color: 'red',
+                            content: e.toString()
+                          }
+                        }
+                      ]
+                    }
+                  })
+                }
+              }
+            })
+          } else {
+            cardContent = Lark.messageCard.defaultCard({
+              title: '错误',
+              content: e.toString()
+            })
+            await client.im.v1.message.reply({
+              path: {
+                message_id
+              },
+              data: {
+                receive_id: chat_id,
+                content: cardContent,
+                msg_type: 'interactive'
+              }
+            })
+          }
         }
       }
     }
