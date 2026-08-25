@@ -141,16 +141,28 @@ wsClient.start({
       console.log('Received card action:', data)
       if (value.action === 'set_model') {
         chat.model = value.model
+        Object.values(value.meta).forEach(console.log)
+        const meta = value.meta
+        const markdown = '- ' + Object.keys(value.meta)
+          .filter(x => meta[x] && !(meta[x] instanceof Object))
+          .map(x => x + ': ' + meta[x])
+          .join('\n- ')
         const data = {
           schema: '2.0',
           body: {
-            elements: [{
-              tag: 'div',
-              text: {
-                tag: 'plain_text',
-                content: '模型被设置为' + value.model
+            elements: [
+              {
+                tag: 'div',
+                text: {
+                  tag: 'plain_text',
+                  content: '模型被设置为' + value.model
+                }
+              },
+              {
+                tag: 'markdown',
+                content: markdown
               }
-            }]
+            ]
           }
         }
         return { card: { data, type: 'raw' } }
@@ -290,7 +302,8 @@ wsClient.start({
                       type: 'callback',
                       value: {
                         action: 'set_model',
-                        model: x.model
+                        model: x.model,
+                        meta: x
                       }
                     }
                   ]
