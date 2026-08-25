@@ -139,7 +139,22 @@ wsClient.start({
         action: { value, form_value = {} }
       } = data
       console.log('Received card action:', data)
-      if (value.action === 'set_model') chat.model = value.model
+      if (value.action === 'set_model') {
+        chat.model = value.model
+        const data = {
+          schema: '2.0',
+          body: {
+            elements: [{
+              tag: 'div',
+              text: {
+                tag: 'plain_text',
+                content: '模型被设置为' + value.model
+              }
+            }]
+          }
+        }
+        return { card: { data, type: 'raw' } }
+      }
       if (value.action === 'mine_restart') {
         init_board()
         init_mine_field()
