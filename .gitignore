@@ -1,3 +1,5 @@
 /env.bat
 /env.sh
 /node_modules
+/data/agent-history.json
+/data/agent-history.json.tmp
