@@ -33,7 +33,7 @@ class MineGame {
       header: {
         title: {
           tag: 'plain_text',
-          content: '6×6扫雷游戏'
+          content: '8×8扫雷游戏'
         },
         template: 'blue',
         padding: '12px 8px 12px 8px'
@@ -61,8 +61,8 @@ class MineGame {
   check_success () {
     const board = this.board
     let all_good = true
-    for (let i = 0; i < 6; i += 1) {
-      for (let j = 0; j < 6; j += 1) {
+    for (let i = 0; i < 8; i += 1) {
+      for (let j = 0; j < 8; j += 1) {
         if (board[i][j] === 'c') return false
         if (board[i][j] === '+' && !this.mine_field[i][j]) return undefined
       }
@@ -84,7 +84,7 @@ class MineGame {
             let count = 0
             for (let x = i - 1; x <= i + 1; x += 1) {
               for (let y = j - 1; y <= j + 1; y += 1) {
-                if (x < 0 || x >= 6 || y < 0 || y >= 6) continue
+                if (x < 0 || x >= 8 || y < 0 || y >= 8) continue
                 if (this.mine_field[x][y]) count += 1
               }
             }
@@ -127,7 +127,7 @@ class MineGame {
               header: {
                 title: {
                   tag: 'plain_text',
-                  content: '6×6扫雷游戏'
+                  content: '8×8扫雷游戏'
                 },
                 template,
                 padding: '12px 8px 12px 8px'
@@ -145,9 +145,9 @@ class MineGame {
 module.exports = MineGame
 
 function init_board (board) {
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     let line = []
-    for (let j = 0; j < 6; j += 1) {
+    for (let j = 0; j < 8; j += 1) {
       line.push('+')
     }
     board[i] = line
@@ -155,9 +155,9 @@ function init_board (board) {
 }
 
 function init_field (mine_field) {
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     let line = []
-    for (let j = 0; j < 6; j += 1) {
+    for (let j = 0; j < 8; j += 1) {
       line.push(Math.random() < 0.15)
     }
     mine_field[i] = line
@@ -190,8 +190,8 @@ function render_line (line_number, line, disabled) {
 
     ret.push({
       tag: 'interactive_container',
-      width: '42px',
-      height: '42px',
+      width: '31px',
+      height: '31px',
       padding: '0px 0px 0px 0px',
       disabled,
       behaviors: [
