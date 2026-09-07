@@ -29,6 +29,7 @@ const wsClient = new Lark.WSClient({ ...baseConfig, loggerLevel: Lark.LoggerLeve
 wsClient.start({
   eventDispatcher: new Lark.EventDispatcher({}).register({
     'card.action.trigger': async data => {
+      const timeStart = process.hrtime.bigint()
       const { action: { value }, context: { open_chat_id } } = data
       if (value.action === 'set_model') {
         chat.model = value.model
@@ -39,8 +40,12 @@ wsClient.start({
           { tag: 'markdown', content: markdown }
         ] } }, type: 'raw' } }
       }
-      if (value.action === 'mine_position') return chatState.get(open_chat_id).chat(value)
-      if (value.action === 'cave') return { card: { data: chatState.get(open_chat_id).ask(value.choice), type: 'raw' } }
+      let ret = undefined
+      if (value.action === 'mine_position') ret = chatState.get(open_chat_id).chat(value)
+      if (value.action === 'cave') ret = { card: { data: chatState.get(open_chat_id).ask(value.choice), type: 'raw' } }
+      const elapsed = Number(process.hrtime.bigint() - timeStart) / 1e6
+      console.log('time', elapsed.toFixed(3), 'ms')
+      return ret
     },
     'im.message.receive_v1': async data => {
       const { event_id, message: { chat_id, content, create_time, message_id }, sender } = data
