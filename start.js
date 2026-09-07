@@ -25,6 +25,59 @@ function formatHistory (tasks) {
   return tasks.map((task, i) => `${i + 1}. ${task.id}\n   ${task.status} | ${task.cwd}\n   ${task.prompt.slice(0, 160)}`).join('\n')
 }
 
+function directoryCard (result) {
+  const elements = [
+    { tag: 'markdown', content: `**当前目录**\n\`${result.cwd}\`` }
+  ]
+  const parent = normalizeCwd(result.cwd + '\\..')
+  if (parent.toLowerCase() !== result.cwd.toLowerCase()) {
+    elements.push({
+      tag: 'button',
+      text: { tag: 'plain_text', content: '⬆️ 上一级' },
+      type: 'default',
+      width: 'default',
+      size: 'medium',
+      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd: parent } }]
+    })
+  }
+
+  const directories = result.entries.filter(x => x.type === 'directory')
+  const files = result.entries.filter(x => x.type !== 'directory')
+
+  for (const entry of directories) {
+    const cwd = normalizeCwd(result.cwd + '\\' + entry.name)
+    elements.push({
+      tag: 'button',
+      text: { tag: 'plain_text', content: `📁 ${entry.name}` },
+      type: 'primary',
+      width: 'default',
+      size: 'medium',
+      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd } }]
+    })
+  }
+
+  if (files.length) {
+    elements.push({
+      tag: 'markdown',
+      content: `**文件**\n${files.map(x => `📄 ${x.name}`).join('\n')}`
+    })
+  }
+
+  if (!directories.length && !files.length) {
+    elements.push({ tag: 'markdown', content: '（空目录）' })
+  }
+
+  return {
+    card: {
+      data: {
+        schema: '2.0',
+        body: { elements }
+      },
+      type: 'raw'
+    }
+  }
+}
+
 const wsClient = new Lark.WSClient({ ...baseConfig, loggerLevel: Lark.LoggerLevel.debug })
 wsClient.start({
   eventDispatcher: new Lark.EventDispatcher({}).register({
@@ -39,6 +92,24 @@ wsClient.start({
           { tag: 'div', text: { tag: 'plain_text', content: '模型被设置为' + value.model } },
           { tag: 'markdown', content: markdown }
         ] } }, type: 'raw' } }
+      }
+      if (value.action === 'd_directory') {
+        try {
+          const result = listDirectory(value.cwd)
+          const elapsed = Number(process.hrtime.bigint() - timeStart) / 1e6
+          console.log('time', elapsed.toFixed(3), 'ms')
+          return directoryCard(result)
+        } catch (e) {
+          return {
+            card: {
+              data: {
+                schema: '2.0',
+                body: { elements: [{ tag: 'markdown', content: `**目录读取失败**\n${e.message}` }] }
+              },
+              type: 'raw'
+            }
+          }
+        }
       }
       let ret = undefined
       if (value.action === 'mine_position') ret = chatState.get(open_chat_id).chat(value)
@@ -66,8 +137,13 @@ wsClient.start({
           const target = cmd.slice(command.length).trim() || 'D:\\'
           const result = listDirectory(target)
           responseTitle = 'D盘目录'
-          responseContent = `${result.cwd}\n\n` + result.entries.map(x => `${x.type === 'directory' ? '[DIR]' : '[FILE]'} ${x.name}`).join('\n')
-          if (!result.entries.length) responseContent += '(空目录)'
+          responseContent = null
+          card_id = await client.cardkit.v1.card.create({
+            data: {
+              type: 'card_json',
+              data: JSON.stringify(directoryCard(result).card.data)
+            }
+          }).then(res => res.data.card_id)
         } else if (command === 'task') {
           const raw = cmd.slice(command.length).trim()
           const separator = raw.indexOf('::')
@@ -99,7 +175,7 @@ wsClient.start({
                 const search = cmd.startsWith('models ') ? cmd.slice('models '.length) : ''
                 await chat.models(search).then(async ({ output: { models } }) => {
                   models = models.filter(x => x.features.includes('web-search')).filter(x => x.published_time > '2026-05-20')
-                  models.sort((a, b) => a.published_time < b.published_time ? -1 : 0)
+                  models.sort((a, b) => a.published_time < b.published_time ? 1 : -1)
                   const elements = models.map(x => ({ tag: 'button', text: { tag: 'plain_text', content: x.name }, type: 'primary', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'set_model', model: x.model, meta: x } }] }))
                   const res = await client.cardkit.v1.card.create({ data: { type: 'card_json', data: JSON.stringify({ schema: '2.0', body: { elements } }) } })
                   card_id = res.data.card_id
