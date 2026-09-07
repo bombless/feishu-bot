@@ -25,9 +25,19 @@ function formatHistory (tasks) {
   return tasks.map((task, i) => `${i + 1}. ${task.id}\n   ${task.status} | ${task.cwd}\n   ${task.prompt.slice(0, 160)}`).join('\n')
 }
 
-function directoryCard (result) {
+function directoryCard (result, page = 1) {
+  const pageSize = 180
+  const directories = result.entries.filter(x => x.type === 'directory')
+  const files = result.entries.filter(x => x.type !== 'directory')
+  const entries = [...directories, ...files]
+  const totalPages = Math.max(1, Math.ceil(entries.length / pageSize))
+  const currentPage = Math.min(Math.max(Number(page) || 1, 1), totalPages)
+  const pageEntries = entries.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const pageDirectories = pageEntries.filter(x => x.type === 'directory')
+  const pageFiles = pageEntries.filter(x => x.type !== 'directory')
+
   const elements = [
-    { tag: 'markdown', content: `**当前目录**\n\`${result.cwd}\`` }
+    { tag: 'markdown', content: `**当前目录**\n\`${result.cwd}\`\n\n第 ${currentPage}/${totalPages} 页，共 ${entries.length} 项` }
   ]
   const parent = normalizeCwd(result.cwd + '\\..')
   if (parent.toLowerCase() !== result.cwd.toLowerCase()) {
@@ -37,14 +47,11 @@ function directoryCard (result) {
       type: 'default',
       width: 'default',
       size: 'medium',
-      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd: parent } }]
+      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd: parent, page: 1 } }]
     })
   }
 
-  const directories = result.entries.filter(x => x.type === 'directory')
-  const files = result.entries.filter(x => x.type !== 'directory')
-
-  for (const entry of directories) {
+  for (const entry of pageDirectories) {
     const cwd = normalizeCwd(result.cwd + '\\' + entry.name)
     elements.push({
       tag: 'button',
@@ -52,19 +59,44 @@ function directoryCard (result) {
       type: 'primary',
       width: 'default',
       size: 'medium',
-      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd } }]
+      behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd, page: 1 } }]
     })
   }
 
-  if (files.length) {
+  if (pageFiles.length) {
     elements.push({
       tag: 'markdown',
-      content: `**文件**\n${files.map(x => `📄 ${x.name}`).join('\n')}`
+      content: `**文件**\n${pageFiles.map(x => `📄 ${x.name}`).join('\n')}`
     })
   }
 
-  if (!directories.length && !files.length) {
+  if (!entries.length) {
     elements.push({ tag: 'markdown', content: '（空目录）' })
+  }
+
+  if (totalPages > 1) {
+    const navigation = []
+    if (currentPage > 1) {
+      navigation.push({
+        tag: 'button',
+        text: { tag: 'plain_text', content: '⬅️ 上一页' },
+        type: 'default',
+        width: 'default',
+        size: 'medium',
+        behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd: result.cwd, page: currentPage - 1 } }]
+      })
+    }
+    if (currentPage < totalPages) {
+      navigation.push({
+        tag: 'button',
+        text: { tag: 'plain_text', content: '下一页 ➡️' },
+        type: 'default',
+        width: 'default',
+        size: 'medium',
+        behaviors: [{ type: 'callback', value: { action: 'd_directory', cwd: result.cwd, page: currentPage + 1 } }]
+      })
+    }
+    elements.push({ tag: 'column_set', flex_mode: 'none', horizontal_spacing: 'small', columns: navigation.map(button => ({ tag: 'column', width: 'weighted', weight: 1, elements: [button] })) })
   }
 
   return {
@@ -98,7 +130,7 @@ wsClient.start({
           const result = listDirectory(value.cwd)
           const elapsed = Number(process.hrtime.bigint() - timeStart) / 1e6
           console.log('time', elapsed.toFixed(3), 'ms')
-          return directoryCard(result)
+          return directoryCard(result, value.page)
         } catch (e) {
           return {
             card: {
