@@ -55,7 +55,6 @@ class MineGame {
     this.card_id = res.data.card_id
     console.log('return prompt()')
     return this.card_id
-
   }
 
   check_success () {
@@ -70,77 +69,75 @@ class MineGame {
     return true
   }
 
-  reveal(i, j) {
-        const borad_state = this.board?.[i]?.[j]
-        const mine_state = this.mine_field?.[i]?.[j]
-        
-        let failed = false
+  reveal (i, j) {
+    const borad_state = this.board?.[i]?.[j]
+    const mine_state = this.mine_field?.[i]?.[j]
 
-        if (borad_state === '+') {
-          if (mine_state === true) {
-            failed = true
-            this.board[i][j] = 'c'
-          } else {
-            let count = 0
-            for (let x = i - 1; x <= i + 1; x += 1) {
-              for (let y = j - 1; y <= j + 1; y += 1) {
-                if (x < 0 || x >= BOARD_WIDTH || y < 0 || y >= BOARD_WIDTH) continue
-                if (this.mine_field[x][y]) count += 1
-              }
-            }
-            this.board[i][j] = count ? count : '-'
-            if (!count) {
-                for (let x = -1; x <= 1; x += 1) {
-                    for (let y = -1; y <= 1; y += 1) {
-                        if (!x && !y) continue
-                        this.reveal(i + x, j + y)
-                    }
-                }
+    let failed = false
+
+    if (borad_state === '+') {
+      if (mine_state === true) {
+        failed = true
+        this.board[i][j] = 'c'
+      } else {
+        let count = 0
+        for (let x = i - 1; x <= i + 1; x += 1) {
+          for (let y = j - 1; y <= j + 1; y += 1) {
+            if (x < 0 || x >= BOARD_WIDTH || y < 0 || y >= BOARD_WIDTH) continue
+            if (this.mine_field[x][y]) count += 1
+          }
+        }
+        this.board[i][j] = count ? count : '-'
+        if (!count) {
+          for (let x = -1; x <= 1; x += 1) {
+            for (let y = -1; y <= 1; y += 1) {
+              if (!x && !y) continue
+              this.reveal(i + x, j + y)
             }
           }
         }
-        return failed
-
+      }
+    }
+    return failed
   }
 
-  chat(value) {
-        const i = value?.position?.[0]
-        const j = value?.position?.[1]
+  chat (value) {
+    const i = value?.position?.[0]
+    const j = value?.position?.[1]
 
-
-        let failed = this.reveal(i, j)
-        let toast = undefined
-        let template = 'blue'
-        if (failed) {
-          toast = { type: 'error', content: '失败了！' }
-          template = 'red'
-        } else if (this.check_success() === true) {
-          toast = { type: 'success', content: '成功了！' }
-          template = 'green'
-        }
-        return {
-          toast,
-          card: {
-            type: 'raw',
-            data: {
-              schema: '2.0',
-              header: {
-                title: {
-                  tag: 'plain_text',
-                  content: '8×8扫雷游戏'
-                },
-                template,
-                padding: '12px 8px 12px 8px'
-              },
-              body: {
-                vertical_spacing: '0px',
-                padding: '0px 0px 0px 0px',
-                elements: render_board(this.board, toast)
-              }
-            }
+    let failed = this.reveal(i, j)
+    let toast = undefined
+    let template = 'blue'
+    if (failed) {
+      toast = { type: 'error', content: '失败了！' }
+      template = 'red'
+    } else if (this.check_success() === true) {
+      toast = { type: 'success', content: '成功了！' }
+      template = 'green'
+    }
+    return {
+      toast,
+      card: {
+        type: 'raw',
+        data: {
+          schema: '2.0',
+          header: {
+            title: {
+              tag: 'plain_text',
+              content: `${BOARD_WIDTH}×${BOARD_WIDTH}扫雷游戏`
+            },
+            template,
+            padding: '12px 8px 12px 8px'
+          },
+          body: {
+            vertical_spacing: '0px',
+            padding: '0px 0px 0px 0px',
+            elements: render_board(this.board, toast)
           }
         }
-    } 
+      }
+    }
+  }
 }
 module.exports = MineGame
 
@@ -171,11 +168,10 @@ function render_line (line_number, line, disabled) {
 
   for (let i = 0; i < line.length; i += 1) {
     let img_key
-    let behaviors = []
     switch (line[i]) {
       case '+':
         img_key = icon_untouched
-        behaviors = [
+        const behaviors = [
           {
             type: 'callback',
             value: {
@@ -184,7 +180,24 @@ function render_line (line_number, line, disabled) {
             }
           }
         ]
-        break
+        ret.push({
+          tag: 'interactive_container',
+          width: '28px',
+          height: '28px',
+          padding: '0px 0px 0px 0px',
+          disabled,
+          behaviors,
+          elements: [
+            {
+              tag: 'img',
+              img_key,
+              preview: false,
+              mode: 'stretch',
+              custom_width: 28
+            }
+          ]
+        })
+        continue
       case '-':
         img_key = icon_empty
         break
@@ -201,21 +214,11 @@ function render_line (line_number, line, disabled) {
     }
 
     ret.push({
-      tag: 'interactive_container',
-      width: '28px',
-      height: '28px',
-      padding: '0px 0px 0px 0px',
-      disabled,
-      behaviors,
-      elements: [
-        {
-          tag: 'img',
-          img_key,
-          preview: false,
-          mode: 'stretch',
-          custom_width: 28
-        }
-      ]
+      tag: 'img',
+      img_key,
+      preview: false,
+      mode: 'stretch',
+      custom_width: 28
     })
   }
   return ret
