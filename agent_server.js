@@ -9,7 +9,7 @@ function normalizeCwd (input) {
   const root = path.resolve('D:\\')
   const lower = resolved.toLowerCase()
   const rootLower = root.toLowerCase()
-  if (lower !== rootLower && !lower.startsWith(rootLower + path.sep)) throw new Error('cwd 必须位于 Windows D: 盘内')
+  if (lower !== rootLower && !lower.startsWith(rootLower)) throw new Error('cwd 必须位于 Windows D: 盘内')
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`目录不存在: ${resolved}`)
   return resolved
 }
