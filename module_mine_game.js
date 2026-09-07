@@ -190,8 +190,8 @@ function render_line (line_number, line, disabled) {
 
     ret.push({
       tag: 'interactive_container',
-      width: '31px',
-      height: '31px',
+      width: '32px',
+      height: '32px',
       padding: '0px 0px 0px 0px',
       disabled,
       behaviors: [
@@ -207,7 +207,9 @@ function render_line (line_number, line, disabled) {
         {
           tag: 'img',
           img_key,
-          preview: false
+          preview: false,
+          mode: 'stretch',
+          custom_width: 32
         }
       ]
     })
