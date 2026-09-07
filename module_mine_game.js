@@ -171,9 +171,19 @@ function render_line (line_number, line, disabled) {
 
   for (let i = 0; i < line.length; i += 1) {
     let img_key
+    let behaviors = []
     switch (line[i]) {
       case '+':
         img_key = icon_untouched
+        behaviors = [
+          {
+            type: 'callback',
+            value: {
+              action: 'mine_position',
+              position: [line_number, i]
+            }
+          }
+        ]
         break
       case '-':
         img_key = icon_empty
@@ -196,15 +206,7 @@ function render_line (line_number, line, disabled) {
       height: '28px',
       padding: '0px 0px 0px 0px',
       disabled,
-      behaviors: [
-        {
-          type: 'callback',
-          value: {
-            action: 'mine_position',
-            position: [line_number, i]
-          }
-        }
-      ],
+      behaviors,
       elements: [
         {
           tag: 'img',
