@@ -26,7 +26,7 @@ function formatHistory (tasks) {
 }
 
 function directoryCard (result, page = 1) {
-  const pageSize = 180
+  const pageSize = 80
   const directories = result.entries.filter(x => x.type === 'directory')
   const files = result.entries.filter(x => x.type !== 'directory')
   const entries = [...directories, ...files]
