@@ -22,13 +22,12 @@ function listDirectory (input) {
   }
 }
 
-function runCodex (store, task) {
+function runCodex (store, task, config) {
   store.updateTask(task.id, { status: 'running', startedAt: new Date().toISOString() })
-  const child = spawn(process.env.CODEX_BIN || 'codex', ['exec', task.prompt], {
+  const child = spawn(config.codexBin, ['exec', task.prompt], {
     cwd: task.cwd,
     shell: false,
-    windowsHide: true,
-    env: process.env
+    windowsHide: true
   })
   let output = ''
   let error = ''
@@ -39,7 +38,8 @@ function runCodex (store, task) {
   return child
 }
 
-function createAgentServer ({ store, port = Number(process.env.AGENT_PORT || 8787), host = process.env.AGENT_HOST || '127.0.0.1' }) {
+function createAgentServer ({ store, config }) {
+  const { agentPort: port, agentHost: host } = config
   const send = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(body))
@@ -66,7 +66,7 @@ function createAgentServer ({ store, port = Number(process.env.AGENT_PORT || 878
         if (!body.prompt || typeof body.prompt !== 'string') return send(res, 400, { error: 'prompt required' })
         const cwd = normalizeCwd(body.cwd || 'D:\\')
         const task = store.createTask({ chatId: body.chatId, senderId: body.senderId, cwd, prompt: body.prompt })
-        runCodex(store, task)
+        runCodex(store, task, config)
         return send(res, 202, task)
       }
       return send(res, 404, { error: 'not found' })
