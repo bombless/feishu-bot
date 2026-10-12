@@ -3,6 +3,7 @@ const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
 const AgentStore = require('./agent_store')
+const { runChatTask } = require('./agent_runner')
 const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./config')
 
@@ -188,10 +189,18 @@ const { getConfig } = require('./config')
             runCodex(agentStore, task, config)
             responseTitle = '任务已开启'
             responseContent = formatTask(task) + '\n\n可用 history 查看历史。'
-          } else if (command === 'history' || command === 'tasks') {
+          } else if (command === 'run') {
+            const prompt = cmd.slice(command.length).trim()
+            if (!prompt) throw new Error('用法: run <任务描述>')
+            const cwd = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
+            const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt })
+            runChatTask(agentStore, task, config)
+            responseTitle = '模型 Agent 任务已开启'
+            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
+          } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
             responseContent = formatHistory(agentStore.listTasks(parts[1] || 20))
-          } else if (command === 'taskinfo') {
+          } else if (command === 'id' || command === 'taskinfo') {
             const task = agentStore.getTask(parts[1])
             if (!task) throw new Error('找不到任务: ' + (parts[1] || ''))
             responseTitle = '任务详情'
@@ -217,7 +226,7 @@ const { getConfig } = require('./config')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nhistory [数量] 查询持久化任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
