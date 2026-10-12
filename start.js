@@ -200,7 +200,7 @@ const { getConfig } = require('./config')
             if (!prompt) throw new Error('用法: run <任务描述>')
             const cwd = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
             const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt })
-            runChatTask(agentStore, task, config)
+            runChatTask(agentStore, task, Object.assign({}, config, { model: chat.model }))
             responseTitle = '模型 Agent 任务已开启'
             responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
