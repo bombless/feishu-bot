@@ -36,7 +36,9 @@ class AgentStore {
       finishedAt: null,
       exitCode: null,
       output: '',
-      error: ''
+      error: '',
+      trace: [],
+      messages: []
     }
     this.data.tasks.unshift(task)
     this.save()
