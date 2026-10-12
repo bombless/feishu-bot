@@ -61,6 +61,17 @@ function createAgentServer ({ store, config }) {
         const task = store.getTask(decodeURIComponent(url.pathname.slice('/agent/tasks/'.length)))
         return task ? send(res, 200, task) : send(res, 404, { error: 'task not found' })
       }
+      if (req.method === 'POST' && url.pathname === '/agent/tool') {
+        const body = await readJson(req)
+        if (!body.tool || typeof body.tool !== 'string') return send(res, 400, { error: 'tool required' })
+        if (body.args !== undefined && (!body.args || typeof body.args !== 'object' || Array.isArray(body.args))) return send(res, 400, { error: 'args must be an object' })
+        // Keep the same workspace boundary and command-execution opt-in as the shared runtime.
+        process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || config.agentWorkspace || 'D:\\\\mcp-agent-workspace'
+        const { runAgentTool, AgentRequestSchema } = await import('@bombless/agent-lib')
+        const request = AgentRequestSchema.parse({ type: 'request', id: 'feishu-http', tool: body.tool, args: body.args || {} })
+        const result = await runAgentTool(request.tool, request.args, { logCommand: (command, cwd) => console.log('[agent-lib]', command, cwd || '') })
+        return send(res, 200, { ok: true, result })
+      }
       if (req.method === 'POST' && url.pathname === '/agent/task') {
         const body = await readJson(req)
         if (!body.prompt || typeof body.prompt !== 'string') return send(res, 400, { error: 'prompt required' })
