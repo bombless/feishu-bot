@@ -12,12 +12,19 @@ function stringifyResult (value) {
   try { return JSON.stringify(value) } catch { return String(value) }
 }
 
-async function runChatTask (store, task, config) {
-  const startedAt = new Date().toISOString()
-  store.updateTask(task.id, { status: 'running', startedAt, trace: [], messages: [] })
-  const workspace = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
-  process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || workspace
+async function consumeTurn (iterator) {
+  let text = ''
+  const calls = []
+  for await (const chunk of iterator) {
+    if (chunk.startsWith('t')) text += chunk.slice(1)
+    else if (chunk.startsWith('o')) calls.push(JSON.parse(chunk.slice(1)))
+  }
+  return { text, calls }
+}
 
+async function runChatTask (store, task, config) {
+  store.updateTask(task.id, { status: 'running', startedAt: new Date().toISOString(), trace: [], messages: [] })
+  process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
   const chat = new Chat({
     url: config.url,
     apiKey: config.apiKey,
@@ -34,28 +41,14 @@ async function runChatTask (store, task, config) {
   const trace = []
   const maxRounds = 12
   try {
+    let turn = await consumeTurn(chat.ask(task.prompt))
     for (let round = 0; round < maxRounds; round++) {
-      let textOutput = ''
-      const calls = []
-      for await (const chunk of chat.ask(round === 0 ? task.prompt : '', undefined)) {
-        if (chunk.startsWith('t')) textOutput += chunk.slice(1)
-        else if (chunk.startsWith('o')) calls.push(JSON.parse(chunk.slice(1)))
-      }
-      if (!calls.length) {
-        store.updateTask(task.id, {
-          status: 'succeeded',
-          finishedAt: new Date().toISOString(),
-          exitCode: 0,
-          output: textOutput,
-          error: '',
-          trace,
-          messages: chat.messages
-        })
+      if (!turn.calls.length) {
+        store.updateTask(task.id, { status: 'succeeded', finishedAt: new Date().toISOString(), exitCode: 0, output: turn.text, error: '', trace, messages: chat.messages })
         return
       }
-
       const results = []
-      for (const call of calls) {
+      for (const call of turn.calls) {
         const item = { round: round + 1, id: call.id, name: call.name, arguments: call.arguments, startedAt: new Date().toISOString() }
         try {
           if (!TOOLS.some(t => t.function.name === call.name)) throw new Error('模型请求了未注册的工具: ' + call.name)
@@ -73,35 +66,12 @@ async function runChatTask (store, task, config) {
         results.push({ id: call.id, content: item.status === 'succeeded' ? item.result : '工具执行失败: ' + item.error })
         store.updateTask(task.id, { trace, messages: chat.messages })
       }
-      for await (const chunk of chat.reportCalls(results, undefined)) {
-        if (chunk.startsWith('t')) textOutput += chunk.slice(1)
-      }
-      store.updateTask(task.id, { trace, messages: chat.messages, output: textOutput })
-      // reportCalls may yield another tool call; process it in the next iteration by
-      // adding the tool-call response back through request() on the following pass.
-      if (chat.messages.length && chat.messages[chat.messages.length - 1].role === 'assistant' && !chat.messages[chat.messages.length - 1].tool_calls) {
-        store.updateTask(task.id, {
-          status: 'succeeded',
-          finishedAt: new Date().toISOString(),
-          exitCode: 0,
-          output: textOutput,
-          error: '',
-          trace,
-          messages: chat.messages
-        })
-        return
-      }
+      turn = await consumeTurn(chat.reportCalls(results))
+      store.updateTask(task.id, { trace, messages: chat.messages, output: turn.text })
     }
     throw new Error('达到工具调用轮数上限（' + maxRounds + '），任务已停止以避免无限循环。')
   } catch (error) {
-    store.updateTask(task.id, {
-      status: 'failed',
-      finishedAt: new Date().toISOString(),
-      exitCode: 1,
-      error: error && error.stack ? error.stack : String(error),
-      trace,
-      messages: chat.messages
-    })
+    store.updateTask(task.id, { status: 'failed', finishedAt: new Date().toISOString(), exitCode: 1, error: error && error.stack ? error.stack : String(error), trace, messages: chat.messages })
   }
 }
 
