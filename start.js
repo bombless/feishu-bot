@@ -17,10 +17,16 @@ const { getConfig } = require('./config')
   const chatState = new Map()
   const eventLog = new Map()
 
-  function formatTask (task) {
+  function formatTask (task, includeHistory = false) {
     const output = (task.output || task.error || '').trim()
     const tail = output ? `\n输出:\n${output.slice(-3000)}` : ''
-    return `ID: ${task.id}\n状态: ${task.status}\n目录: ${task.cwd}\n任务: ${task.prompt}\n创建: ${task.createdAt}${task.startedAt ? `\n开始: ${task.startedAt}` : ''}${task.finishedAt ? `\n结束: ${task.finishedAt}` : ''}${task.exitCode !== null ? `\n退出码: ${task.exitCode}` : ''}${tail}`
+    const toolHistory = includeHistory ? (task.trace || []).map((item, i) => `\n\n工具调用 ${i + 1}: ${item.name}\n状态: ${item.status}\n参数: ${JSON.stringify(item.arguments || {})}\n${item.status === 'failed' ? '错误: ' + item.error : '结果: ' + (item.result || '')}`).join('') : ''
+    const messages = includeHistory ? (task.messages || []).map((message, i) => {
+      const calls = message.tool_calls ? '\\n工具请求: ' + message.tool_calls.map(call => call.function.name + '(' + call.function.arguments + ')').join('; ') : ''
+      const body = typeof message.content === 'string' ? message.content : ''
+      return `\n\n消息 ${i + 1} [${message.role}]${calls}\n${body}`
+    }).join('') : ''
+    return `ID: ${task.id}\n状态: ${task.status}\n目录: ${task.cwd}\n任务: ${task.prompt}\n创建: ${task.createdAt}${task.startedAt ? `\n开始: ${task.startedAt}` : ''}${task.finishedAt ? `\n结束: ${task.finishedAt}` : ''}${task.exitCode !== null ? `\n退出码: ${task.exitCode}` : ''}${tail}${toolHistory}${messages}`
   }
 
   function formatHistory (tasks) {
@@ -204,7 +210,7 @@ const { getConfig } = require('./config')
             const task = agentStore.getTask(parts[1])
             if (!task) throw new Error('找不到任务: ' + (parts[1] || ''))
             responseTitle = '任务详情'
-            responseContent = formatTask(task)
+            responseContent = formatTask(task, true)
           } else {
             switch (cmd) {
               case 'mine': {
