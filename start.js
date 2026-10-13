@@ -85,7 +85,7 @@ const { attachTaskSummary } = require('./task-summary')
         tag: 'collapsible_panel',
         expanded: false,
         header: {
-          title: { tag: 'plain_text', content: `${summary} · ${created}` },
+          title: { tag: 'plain_text', content: `${created} · ${summary}` },
           vertical_align: 'center',
           width: 'fill'
         },
