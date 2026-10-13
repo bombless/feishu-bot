@@ -5,7 +5,10 @@ const TOOLS = [
   { type: 'function', function: { name: 'get_system_info', description: '获取运行环境和 agent 工作区信息', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
   { type: 'function', function: { name: 'list_directory', description: '列出 agent 工作区内的目录内容', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内目录的绝对路径' } }, required: ['path'], additionalProperties: false } } },
   { type: 'function', function: { name: 'read_file', description: '读取 agent 工作区内的 UTF-8 文本文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内文件的绝对路径' } }, required: ['path'], additionalProperties: false } } },
-  { type: 'function', function: { name: 'write_file', description: '写入 agent 工作区内的 UTF-8 文本文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内文件的绝对路径' }, content: { type: 'string', description: '要写入的完整文件内容' } }, required: ['path', 'content'], additionalProperties: false } } }
+  { type: 'function', function: { name: 'write_file', description: '写入 agent 工作区内的 UTF-8 文本文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内文件的绝对路径' }, content: { type: 'string', description: '要写入的完整文件内容' } }, required: ['path', 'content'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'geocode_location', description: '将地名解析为经纬度、国家和时区，使用 Open-Meteo 地理编码服务', parameters: { type: 'object', properties: { location: { type: 'string', description: '城市、地区或地点名称' } }, required: ['location'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'get_weather_forecast', description: '查询地点当前天气及未来 7 天预报', parameters: { type: 'object', properties: { location: { type: 'string', description: '城市、地区或地点名称' } }, required: ['location'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'get_historical_weather', description: '查询地点指定日期范围的历史逐日天气，可用于统计晴天、降雨和温度等', parameters: { type: 'object', properties: { location: { type: 'string', description: '城市、地区或地点名称' }, start_date: { type: 'string', description: '开始日期，YYYY-MM-DD' }, end_date: { type: 'string', description: '结束日期，YYYY-MM-DD' }, variables: { type: 'array', items: { type: 'string', enum: ['weather_code', 'temperature_2m_max', 'temperature_2m_min', 'temperature_2m_mean', 'sunshine_duration', 'precipitation_sum', 'rain_sum', 'wind_speed_10m_max'] }, description: '可选的逐日指标数组；默认天气代码、最高/最低温度和降水量' }, timezone: { type: 'string', description: '可选时区，例如 Asia/Seoul；默认地点时区' } }, required: ['location', 'start_date', 'end_date'], additionalProperties: false } } }
 ]
 
 function stringifyResult (value) {
@@ -36,6 +39,7 @@ async function runChatTask (store, task, config) {
       '你是一个可以调用本地 agent 工具的任务执行助手。',
       '需要事实、文件或环境信息时优先使用工具，不要虚构工具执行结果。',
       '工具只能访问 AGENT_WORKSPACE 指定的工作区。遇到工具错误时说明错误并尝试安全的替代方案。',
+      '天气查询可使用 Open-Meteo 工具：当前天气/预报用 get_weather_forecast，历史逐日数据用 get_historical_weather，地点解析用 geocode_location。统计“晴天”时先说明采用的天气代码或日照时长标准。',
       '完成任务后用中文简洁总结结果；若用户要求查询实时/外部信息而工具不具备联网能力，应明确说明限制。'
     ].join('\n')
   })
