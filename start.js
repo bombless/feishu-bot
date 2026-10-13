@@ -34,6 +34,24 @@ const { getConfig } = require('./config')
     return tasks.map((task, i) => `${i + 1}. ${task.id}\n   ${task.status} | ${task.cwd}\n   ${task.prompt.slice(0, 160)}`).join('\n')
   }
 
+  function taskListCard (tasks) {
+    const elements = [
+      { tag: 'markdown', content: tasks.length ? '**点击任务按钮查看详情和工具调用历史**' : '暂无任务历史。' }
+    ]
+    for (const task of tasks) {
+      const label = `${task.status === 'running' ? '🟡' : task.status === 'succeeded' ? '✅' : task.status === 'failed' ? '❌' : '⚪'} ${task.id} | ${task.prompt.slice(0, 48)}`
+      elements.push({
+        tag: 'button',
+        text: { tag: 'plain_text', content: label.slice(0, 100) },
+        type: task.status === 'failed' ? 'danger' : 'primary',
+        width: 'default',
+        size: 'medium',
+        behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
+      })
+    }
+    return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
+  }
+
   function directoryCard (result, page = 1) {
     const pageSize = 80
     const directories = result.entries.filter(x => x.type === 'directory')
@@ -134,6 +152,13 @@ const { getConfig } = require('./config')
             { tag: 'markdown', content: markdown }
           ] } }, type: 'raw' } }
         }
+        if (value.action === 'task_id') {
+          const task = agentStore.getTask(value.id)
+          if (!task) {
+            return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
+          }
+          return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: formatTask(task, true) }] } }, type: 'raw' } }
+        }
         if (value.action === 'd_directory') {
           try {
             const result = listDirectory(value.cwd)
@@ -205,7 +230,13 @@ const { getConfig } = require('./config')
             responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
-            responseContent = formatHistory(agentStore.listTasks(parts[1] || 20))
+            card_id = await client.cardkit.v1.card.create({
+              data: {
+                type: 'card_json',
+                data: JSON.stringify(taskListCard(agentStore.listTasks(parts[1] || 20)).card.data)
+              }
+            }).then(res => res.data.card_id)
+            responseContent = null
           } else if (command === 'id' || command === 'taskinfo') {
             const task = agentStore.getTask(parts[1])
             if (!task) throw new Error('找不到任务: ' + (parts[1] || ''))
