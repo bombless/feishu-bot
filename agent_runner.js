@@ -1,6 +1,7 @@
 const Chat = require('./chat')
 
 const TOOLS = [
+  { type: 'function', function: { name: 'execute_powershell', description: '在 Windows agent 工作区内执行 PowerShell 脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 PowerShell 脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
   { type: 'function', function: { name: 'get_system_info', description: '获取运行环境和 agent 工作区信息', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
   { type: 'function', function: { name: 'list_directory', description: '列出 agent 工作区内的目录内容', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内目录的绝对路径' } }, required: ['path'], additionalProperties: false } } },
   { type: 'function', function: { name: 'read_file', description: '读取 agent 工作区内的 UTF-8 文本文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内文件的绝对路径' } }, required: ['path'], additionalProperties: false } } },
