@@ -52,7 +52,7 @@ async function runChatTask (store, task, config) {
   const trace = continuing ? [...(task.trace || [])] : []
   const maxRounds = 12
   try {
-    let turn = await consumeTurn(chat.ask(continuing ? task.continuePrompt : task.prompt))
+    let turn = await chat.askOnce(continuing ? task.continuePrompt : task.prompt)
     if (continuing) {
       store.updateTask(task.id, { prompt: task.prompt + '\n\n追问：' + task.continuePrompt, continuePrompt: null })
     }
@@ -80,7 +80,7 @@ async function runChatTask (store, task, config) {
         results.push({ id: call.id, content: item.status === 'succeeded' ? item.result : '工具执行失败: ' + item.error })
         store.updateTask(task.id, { trace, messages: chat.messages })
       }
-      turn = await consumeTurn(chat.reportCalls(results))
+      turn = await chat.reportCallsOnce(results)
       store.updateTask(task.id, { trace, messages: chat.messages, output: turn.text })
     }
     throw new Error('达到工具调用轮数上限（' + maxRounds + '），任务已停止以避免无限循环。')

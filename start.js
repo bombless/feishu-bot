@@ -13,6 +13,21 @@ const { attachTaskSummary } = require('./task-summary')
 ;(async () => {
   const config = await getConfig()
   const chat = new Chat({ url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl })
+  const filteredModelsPath = path.join(__dirname, 'data', 'filtered-models.json')
+  let filteredModels = new Set()
+  try {
+    const saved = JSON.parse(fs.readFileSync(filteredModelsPath, 'utf8'))
+    if (Array.isArray(saved)) filteredModels = new Set(saved.map(String))
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('读取额度不足模型列表失败:', error)
+  }
+  function saveFilteredModels () {
+    fs.mkdirSync(path.dirname(filteredModelsPath), { recursive: true })
+    const tempPath = filteredModelsPath + '.tmp'
+    fs.writeFileSync(tempPath, JSON.stringify([...filteredModels].sort(), null, 2), 'utf8')
+    fs.renameSync(tempPath, filteredModelsPath)
+  }
+  const modelTests = new Map()
   const baseConfig = { appId: config.feishuAppId, appSecret: config.feishuAppSecret }
   const client = new Lark.Client(baseConfig)
   const runLogPath = path.join(__dirname, 'run.log')
@@ -224,6 +239,43 @@ const { attachTaskSummary } = require('./task-summary')
             { tag: 'markdown', content: markdown }
           ] } }, type: 'raw' } }
         }
+        if (value.action === 'test_models') {
+          const test = modelTests.get(value.testId)
+          if (!test) return { toast: { type: 'error', content: '测试任务已过期，请重新发送 models 命令。' } }
+          modelTests.delete(value.testId)
+          ;(async () => {
+            const quotaModels = []
+            const failures = []
+            let successfulModels = 0
+            for (const model of test.models) {
+              try {
+                const probe = chat.clone({ model: model.model })
+                await probe.testQuota('你好')
+                successfulModels++
+              } catch (error) {
+                const message = String(error?.message || error)
+                if (/insufficient[_ -]?quota|quota[_ -]?exceeded|额度不足|余额不足|insufficient balance/i.test(message)) {
+                  quotaModels.push(model)
+                  filteredModels.add(String(model.model))
+                  try { saveFilteredModels() } catch (saveError) { console.error('保存额度不足模型列表失败:', saveError) }
+                } else {
+                  failures.push(`${model.name || model.model}: ${message.slice(0, 180)}`)
+                }
+              }
+            }
+            const report = `模型额度检测完成\n本次检测：${test.models.length} 个模型\n正常完成请求：${successfulModels} 个模型\n检测到额度不足：${quotaModels.length} 个模型\n` +
+              (quotaModels.length ? `\n已过滤模型：\n${quotaModels.map(x => `- ${x.name || x.model} (${x.model})`).join('\n')}\n` : '\n未检测到额度不足的模型。\n') +
+              `\n当前累计过滤：${filteredModels.size} 个模型` +
+              (failures.length ? `\n\n其他检测失败（无法判定额度状态）：\n${failures.join('\n')}` : '')
+            try {
+              await client.im.v1.message.create({
+                params: { receive_id_type: 'chat_id' },
+                data: { receive_id: test.chatId, msg_type: 'text', content: JSON.stringify({ text: report }) }
+              })
+            } catch (sendError) { console.error('发送模型额度检测报告失败:', sendError?.stack || sendError) }
+          })().catch(error => console.error('模型额度检测任务失败:', error?.stack || error))
+          return { toast: { type: 'success', content: `已开始检测 ${test.models.length} 个模型，完成后会另发报告。` } }
+        }
         if (value.action === 'task_id') {
           const task = agentStore.getTask(value.id)
           if (!task) {
@@ -349,9 +401,11 @@ const { attachTaskSummary } = require('./task-summary')
                 if (cmd.startsWith('models')) {
                   const search = cmd.startsWith('models ') ? cmd.slice('models '.length) : ''
                   await chat.models(search).then(async ({ output: { models } }) => {
-                    models = models.filter(x => x.features.includes('web-search')).filter(x => x.published_time > '2026-05-20')
+                    models = models.filter(x => x.features.includes('web-search')).filter(x => x.published_time > '2026-05-20').filter(x => !filteredModels.has(String(x.model)))
                     models.sort((a, b) => a.published_time < b.published_time ? 1 : -1)
-                    const elements = models.map(x => ({ tag: 'button', text: { tag: 'plain_text', content: x.name }, type: 'primary', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'set_model', model: x.model, meta: x } }] }))
+                    const testId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+                    modelTests.set(testId, { chatId: chat_id, models: models.map(x => ({ model: x.model, name: x.name })) })
+                    const elements = [{ tag: 'button', text: { tag: 'plain_text', content: '《测试》' }, type: 'danger', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'test_models', testId } }] }, ...models.map(x => ({ tag: 'button', text: { tag: 'plain_text', content: x.name }, type: 'primary', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'set_model', model: x.model, meta: x } }] }))]
                     const res = await createCardWithLogging('models', { data: { type: 'card_json', data: JSON.stringify({ schema: '2.0', body: { elements } }) } })
                     card_id = res.data.card_id
                   })
