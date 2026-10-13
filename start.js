@@ -8,6 +8,7 @@ const AgentStore = require('./agent_store')
 const { runChatTask } = require('./agent_runner')
 const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./config')
+const { attachTaskSummary } = require('./task-summary')
 
 ;(async () => {
   const config = await getConfig()
@@ -42,15 +43,17 @@ const { getConfig } = require('./config')
   const eventLog = new Map()
 
   function formatTask (task, includeHistory = false) {
-    const output = (task.output || task.error || '').trim()
+    const output = (task.output || '').trim()
+    const errorText = (task.error || '').trim()
     const tail = output ? `\n输出:\n${output.slice(-3000)}` : ''
+    const errorSection = errorText ? `\n\n错误信息:\n${errorText.slice(-2000)}` : ''
     const toolHistory = includeHistory ? (task.trace || []).map((item, i) => `\n\n工具调用 ${i + 1}: ${item.name}\n状态: ${item.status}\n参数: ${JSON.stringify(item.arguments || {})}\n${item.status === 'failed' ? '错误: ' + item.error : '结果: ' + (item.result || '')}`).join('') : ''
     const messages = includeHistory ? (task.messages || []).map((message, i) => {
       const calls = message.tool_calls ? '\\n工具请求: ' + message.tool_calls.map(call => call.function.name + '(' + call.function.arguments + ')').join('; ') : ''
       const body = typeof message.content === 'string' ? message.content : ''
       return `\n\n消息 ${i + 1} [${message.role}]${calls}\n${body}`
     }).join('') : ''
-    return `ID: ${task.id}\n状态: ${task.status}\n目录: ${task.cwd}\n任务: ${task.prompt}\n创建: ${task.createdAt}${task.startedAt ? `\n开始: ${task.startedAt}` : ''}${task.finishedAt ? `\n结束: ${task.finishedAt}` : ''}${task.exitCode !== null ? `\n退出码: ${task.exitCode}` : ''}${tail}${toolHistory}${messages}`
+    return `ID: ${task.id}\n状态: ${task.status}\n目录: ${task.cwd}\n任务: ${task.prompt}\n创建: ${task.createdAt}${task.startedAt ? `\n开始: ${task.startedAt}` : ''}${task.finishedAt ? `\n结束: ${task.finishedAt}` : ''}${task.exitCode !== null ? `\n退出码: ${task.exitCode}` : ''}${tail}${errorSection}${toolHistory}${messages}`
   }
 
   function formatHistory (tasks) {
@@ -59,34 +62,50 @@ const { getConfig } = require('./config')
   }
 
   function taskListCard (tasks) {
+    // JSON 2.0 cards have a component-count limit; each panel contains two child components.
+    const visibleTasks = tasks.slice(0, 60)
     const elements = [
-      { tag: 'markdown', content: tasks.length ? `共 ${tasks.length} 个任务，展示状态、目录和任务摘要；需要完整输出时点击“查看详情”。` : '暂无任务历史。' }
+      { tag: 'markdown', content: tasks.length ? `共 ${tasks.length} 个任务，当前展示 ${visibleTasks.length} 个；点击标题可展开详情。` : '暂无任务历史。' }
     ]
-    for (const task of tasks) {
+    for (const task of visibleTasks) {
       const statusLabel = task.status === 'running' ? '🟡 运行中' : task.status === 'queued' ? '⏳ 排队中' : task.status === 'succeeded' ? '✅ 已完成' : task.status === 'failed' ? '❌ 失败' : `⚪ ${task.status || '未知状态'}`
       const prompt = (task.prompt || '').trim()
-      const summary = prompt.length > 180 ? prompt.slice(0, 180) + '…' : (prompt || '（无任务描述）')
-      const lines = [
-        `### ${statusLabel}`,
+      const promptChars = Array.from(prompt)
+      const summary = (task.summary || promptChars.slice(0, 8).join('') + (promptChars.length > 8 ? '…' : '') || '（无任务描述）').replace(/\n/g, ' ')
+      const created = task.createdAt ? new Date(task.createdAt).toLocaleString('zh-CN', { hour12: false }) : '创建时间未知'
+      const detailLines = [
+        `**状态：** ${statusLabel}`,
         `**任务 ID：** \`${task.id}\``,
         `**工作目录：** \`${task.cwd || '未知'}\``,
-        `**任务摘要：** ${summary}`,
-        `**创建时间：** ${task.createdAt || '未知'}${task.finishedAt ? `  |  **结束时间：** ${task.finishedAt}` : ''}`
+        `**原始任务：** ${prompt || '（无任务描述）'}`,
+        `**创建时间：** ${created}${task.finishedAt ? `  |  **结束时间：** ${new Date(task.finishedAt).toLocaleString('zh-CN', { hour12: false })}` : ''}`
       ]
-      if (task.exitCode !== null && task.exitCode !== undefined) lines.push(`**退出码：** ${task.exitCode}`)
-      elements.push({ tag: 'markdown', content: lines.join('\n\n') })
+      if (task.exitCode !== null && task.exitCode !== undefined) detailLines.push(`**退出码：** ${task.exitCode}`)
       elements.push({
-        tag: 'button',
-        text: { tag: 'plain_text', content: '查看详情' },
-        type: 'primary',
-        width: 'default',
-        size: 'medium',
-        behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
+        tag: 'collapsible_panel',
+        expanded: false,
+        header: {
+          title: { tag: 'plain_text', content: `${summary} · ${created}` },
+          vertical_align: 'center',
+          width: 'fill'
+        },
+        border: { color: 'grey', corner_radius: '8px' },
+        padding: '8px 12px',
+        elements: [
+          { tag: 'markdown', content: detailLines.join('\n\n') },
+          {
+            tag: 'button',
+            text: { tag: 'plain_text', content: '查看完整详情 / 继续追问' },
+            type: 'primary',
+            width: 'default',
+            size: 'medium',
+            behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
+          }
+        ]
       })
     }
     return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
   }
-
   function taskDetailCard (task) {
     const content = formatTask(task, true) + '\n\n---\n\n### 继续追问\n输入补充要求后，点击下方按钮，机器人会沿用该任务已有的 Agent 对话继续执行。'
     const elements = [
@@ -300,6 +319,7 @@ const { getConfig } = require('./config')
             if (!match || !match[0] || !match[1]) throw new Error('用法: task D:\\项目目录 :: 任务描述（路径含空格时也可用此格式）')
             const cwd = normalizeCwd(match[0])
             const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt: match[1] })
+            attachTaskSummary(agentStore, task, config)
             runCodex(agentStore, task, config)
             responseTitle = '任务已开启'
             responseContent = formatTask(task) + '\n\n可用 history 查看历史。'
@@ -308,6 +328,7 @@ const { getConfig } = require('./config')
             if (!prompt) throw new Error('用法: run <任务描述>')
             const cwd = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
             const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt })
+            attachTaskSummary(agentStore, task, Object.assign({}, config, { model: chat.model }))
             runChatTask(agentStore, task, Object.assign({}, config, { model: chat.model }))
             responseTitle = '模型 Agent 任务已开启'
             responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'

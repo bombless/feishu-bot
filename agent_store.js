@@ -30,6 +30,7 @@ class AgentStore {
       senderId: senderId || null,
       cwd,
       prompt,
+      summary: '',
       status: 'queued',
       createdAt: now,
       startedAt: null,

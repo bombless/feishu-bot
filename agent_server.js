@@ -2,6 +2,7 @@ const http = require('http')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
+const { attachTaskSummary } = require('./task-summary')
 
 function normalizeCwd (input) {
   const requested = input || 'D:\\'
@@ -77,6 +78,7 @@ function createAgentServer ({ store, config }) {
         if (!body.prompt || typeof body.prompt !== 'string') return send(res, 400, { error: 'prompt required' })
         const cwd = normalizeCwd(body.cwd || 'D:\\')
         const task = store.createTask({ chatId: body.chatId, senderId: body.senderId, cwd, prompt: body.prompt })
+        attachTaskSummary(store, task, config)
         runCodex(store, task, config)
         return send(res, 202, task)
       }
