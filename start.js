@@ -155,9 +155,9 @@ const { getConfig } = require('./config')
         if (value.action === 'task_id') {
           const task = agentStore.getTask(value.id)
           if (!task) {
-            return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\\n${value.id}` }] } }, type: 'raw' } }
+            return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
           }
-          return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: formatTask(task, true).replace(/\\n/g, '\\n') }] } }, type: 'raw' } }
+          return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: formatTask(task, true) }] } }, type: 'raw' } }
         }
         if (value.action === 'd_directory') {
           try {
