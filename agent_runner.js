@@ -2,6 +2,7 @@ const Chat = require('./chat')
 
 const TOOLS = [
   { type: 'function', function: { name: 'execute_powershell', description: '在 Windows agent 工作区内执行 PowerShell 脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 PowerShell 脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'test_proxy_7897', description: '测试本机 HTTP 代理 127.0.0.1:7897 是否可连接，并通过代理请求指定 URL', parameters: { type: 'object', properties: { url: { type: 'string', description: '要通过代理访问的绝对 HTTP 或 HTTPS URL，例如 https://www.google.com' } }, required: ['url'], additionalProperties: false } } },
   { type: 'function', function: { name: 'get_system_info', description: '获取运行环境和 agent 工作区信息', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
   { type: 'function', function: { name: 'list_directory', description: '列出 agent 工作区内的目录内容', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内目录的绝对路径' } }, required: ['path'], additionalProperties: false } } },
   { type: 'function', function: { name: 'read_file', description: '读取 agent 工作区内的 UTF-8 文本文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内文件的绝对路径' } }, required: ['path'], additionalProperties: false } } },
@@ -27,7 +28,11 @@ async function consumeTurn (iterator) {
 }
 
 async function runChatTask (store, task, config) {
-  store.updateTask(task.id, { status: 'running', startedAt: new Date().toISOString(), trace: [], messages: [] })
+  const continuing = Boolean(task.continuePrompt && Array.isArray(task.messages) && task.messages.length)
+  store.updateTask(task.id, {
+    status: 'running', startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: '',
+    ...(continuing ? {} : { trace: [], messages: [] })
+  })
   process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
   const chat = new Chat({
     url: config.url,
@@ -43,10 +48,14 @@ async function runChatTask (store, task, config) {
       '完成任务后用中文简洁总结结果；若用户要求查询实时/外部信息而工具不具备联网能力，应明确说明限制。'
     ].join('\n')
   })
-  const trace = []
+  if (continuing) chat.messages = task.messages
+  const trace = continuing ? [...(task.trace || [])] : []
   const maxRounds = 12
   try {
-    let turn = await consumeTurn(chat.ask(task.prompt))
+    let turn = await consumeTurn(chat.ask(continuing ? task.continuePrompt : task.prompt))
+    if (continuing) {
+      store.updateTask(task.id, { prompt: task.prompt + '\n\n追问：' + task.continuePrompt, continuePrompt: null })
+    }
     for (let round = 0; round < maxRounds; round++) {
       if (!turn.calls.length) {
         store.updateTask(task.id, { status: 'succeeded', finishedAt: new Date().toISOString(), exitCode: 0, output: turn.text, error: '', trace, messages: chat.messages })

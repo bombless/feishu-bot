@@ -1,4 +1,6 @@
 const Lark = require('@larksuiteoapi/node-sdk')
+const fs = require('node:fs')
+const path = require('node:path')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
@@ -12,6 +14,28 @@ const { getConfig } = require('./config')
   const chat = new Chat({ url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl })
   const baseConfig = { appId: config.feishuAppId, appSecret: config.feishuAppSecret }
   const client = new Lark.Client(baseConfig)
+  const runLogPath = path.join(__dirname, 'run.log')
+  function writeRunLog (label, outcome, details) {
+    const line = `[${new Date().toISOString()}] [card.create:${label}] ${outcome}\n${details}\n`
+    try {
+      fs.appendFileSync(runLogPath, line, 'utf8')
+    } catch (logError) {
+      console.error(`[card.create:${label}] failed to write run.log:`, logError?.stack || logError)
+    }
+  }
+  async function createCardWithLogging (label, params) {
+    try {
+      const response = await client.cardkit.v1.card.create(params)
+      const details = JSON.stringify(response, null, 2)
+      console.log(`[card.create:${label}] response:\n${details}`)
+      writeRunLog(label, 'response', details)
+      return response
+    } catch (error) {
+      console.error(`[card.create:${label}] error:`, error?.stack || error)
+      writeRunLog(label, 'error', error?.stack || String(error))
+      throw error
+    }
+  }
   const agentStore = new AgentStore()
   createAgentServer({ store: agentStore, config })
   const chatState = new Map()
@@ -36,19 +60,46 @@ const { getConfig } = require('./config')
 
   function taskListCard (tasks) {
     const elements = [
-      { tag: 'markdown', content: tasks.length ? '**点击任务按钮查看详情和工具调用历史**' : '暂无任务历史。' }
+      { tag: 'markdown', content: tasks.length ? `共 ${tasks.length} 个任务，展示状态、目录和任务摘要；需要完整输出时点击“查看详情”。` : '暂无任务历史。' }
     ]
     for (const task of tasks) {
-      const label = `${task.status === 'running' ? '🟡' : task.status === 'succeeded' ? '✅' : task.status === 'failed' ? '❌' : '⚪'} ${task.id} | ${task.prompt.slice(0, 48)}`
+      const statusLabel = task.status === 'running' ? '🟡 运行中' : task.status === 'queued' ? '⏳ 排队中' : task.status === 'succeeded' ? '✅ 已完成' : task.status === 'failed' ? '❌ 失败' : `⚪ ${task.status || '未知状态'}`
+      const prompt = (task.prompt || '').trim()
+      const summary = prompt.length > 180 ? prompt.slice(0, 180) + '…' : (prompt || '（无任务描述）')
+      const lines = [
+        `### ${statusLabel}`,
+        `**任务 ID：** \`${task.id}\``,
+        `**工作目录：** \`${task.cwd || '未知'}\``,
+        `**任务摘要：** ${summary}`,
+        `**创建时间：** ${task.createdAt || '未知'}${task.finishedAt ? `  |  **结束时间：** ${task.finishedAt}` : ''}`
+      ]
+      if (task.exitCode !== null && task.exitCode !== undefined) lines.push(`**退出码：** ${task.exitCode}`)
+      elements.push({ tag: 'markdown', content: lines.join('\n\n') })
       elements.push({
         tag: 'button',
-        text: { tag: 'plain_text', content: label.slice(0, 100) },
-        type: task.status === 'failed' ? 'danger' : 'primary',
+        text: { tag: 'plain_text', content: '查看详情' },
+        type: 'primary',
         width: 'default',
         size: 'medium',
         behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
       })
     }
+    return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
+  }
+
+  function taskDetailCard (task) {
+    const content = formatTask(task, true) + '\n\n---\n\n### 继续追问\n输入补充要求后，点击下方按钮，机器人会沿用该任务已有的 Agent 对话继续执行。'
+    const elements = [
+      { tag: 'markdown', content },
+      {
+        tag: 'form',
+        name: 'task_followup_form',
+        elements: [
+          { tag: 'input', name: 'followup', placeholder: { tag: 'plain_text', content: '输入追问内容，例如：修复后再运行测试' }, default_value: '', max_length: 1000, width: 'default' },
+          { tag: 'button', name: 'submit_followup', form_action_type: 'submit', text: { tag: 'plain_text', content: '继续提问' }, type: 'primary', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'continue_task', id: task.id } }] }
+        ]
+      }
+    ]
     return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
   }
 
@@ -142,6 +193,8 @@ const { getConfig } = require('./config')
     eventDispatcher: new Lark.EventDispatcher({}).register({
       'card.action.trigger': async data => {
         const timeStart = process.hrtime.bigint()
+        console.log('[card.action.trigger] received:', JSON.stringify({ action: data?.action, context: data?.context, event: data?.event }, null, 2))
+        try {
         const { action: { value }, context: { open_chat_id } } = data
         if (value.action === 'set_model') {
           chat.model = value.model
@@ -157,7 +210,33 @@ const { getConfig } = require('./config')
           if (!task) {
             return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
           }
-          return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: formatTask(task, true) }] } }, type: 'raw' } }
+          // WS card-action handlers ignore their return value; create a supported detail card and reply to the clicked message.
+          const created = await createCardWithLogging('task-detail-from-list', {
+            data: { type: 'card_json', data: JSON.stringify(taskDetailCard(task).card.data) }
+          })
+          if (!created.data?.card_id) throw new Error('飞书未能创建任务详情卡片')
+          const sent = await client.im.v1.message.reply({
+            path: { message_id: data.context.open_message_id },
+            data: {
+              receive_id: data.context.open_chat_id,
+              content: JSON.stringify({ type: 'card', data: { card_id: created.data.card_id } }),
+              msg_type: 'interactive'
+            }
+          })
+          console.log('[card.action.trigger] task detail reply:', JSON.stringify(sent))
+          return
+        }
+        if (value.action === 'continue_task') {
+          const task = agentStore.getTask(value.id)
+          const formValue = data.action?.form_value || data.action?.formValue || {}
+          const prompt = String(formValue.followup || '').trim()
+          if (!task) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\\n${value.id}` }] } }, type: 'raw' } }
+          if (!prompt) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '请先输入追问内容，再点击“继续提问”。' }] } }, type: 'raw' } }
+          if (task.status === 'running' || task.status === 'queued') return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务仍在运行中，请完成后再继续追问。' }] } }, type: 'raw' } }
+          if (!Array.isArray(task.messages) || !task.messages.length) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务没有可续接的 Agent 对话历史。' }] } }, type: 'raw' } }
+          agentStore.updateTask(task.id, { continuePrompt: prompt })
+          runChatTask(agentStore, agentStore.getTask(task.id), Object.assign({}, config, { model: chat.model }))
+          return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `已提交追问，正在沿用原对话继续执行。\n\n**任务 ID：** ${task.id}\n\n完成后再次输入 id ${task.id} 查看结果或继续提问。` }] } }, type: 'raw' } }
         }
         if (value.action === 'd_directory') {
           try {
@@ -183,6 +262,10 @@ const { getConfig } = require('./config')
         const elapsed = Number(process.hrtime.bigint() - timeStart) / 1e6
         console.log('time', elapsed.toFixed(3), 'ms')
         return ret
+        } catch (error) {
+          console.error('[card.action.trigger] handler error:', error?.stack || error)
+          return { toast: { type: 'error', content: '处理卡片操作失败，请查看机器人日志。' } }
+        }
       },
       'im.message.receive_v1': async data => {
         const { event_id, message: { chat_id, content, create_time, message_id }, sender } = data
@@ -204,7 +287,7 @@ const { getConfig } = require('./config')
             const result = listDirectory(target)
             responseTitle = 'D盘目录'
             responseContent = null
-            card_id = await client.cardkit.v1.card.create({
+            card_id = await createCardWithLogging('directory', {
               data: {
                 type: 'card_json',
                 data: JSON.stringify(directoryCard(result).card.data)
@@ -230,7 +313,7 @@ const { getConfig } = require('./config')
             responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
-            card_id = await client.cardkit.v1.card.create({
+            card_id = await createCardWithLogging('task-list', {
               data: {
                 type: 'card_json',
                 data: JSON.stringify(taskListCard(agentStore.listTasks(parts[1] || 20)).card.data)
@@ -241,7 +324,10 @@ const { getConfig } = require('./config')
             const task = agentStore.getTask(parts[1])
             if (!task) throw new Error('找不到任务: ' + (parts[1] || ''))
             responseTitle = '任务详情'
-            responseContent = formatTask(task, true)
+            card_id = await createCardWithLogging('task-detail', {
+              data: { type: 'card_json', data: JSON.stringify(taskDetailCard(task).card.data) }
+            }).then(res => res.data.card_id)
+            responseContent = null
           } else {
             switch (cmd) {
               case 'mine': {
@@ -257,7 +343,7 @@ const { getConfig } = require('./config')
                     models = models.filter(x => x.features.includes('web-search')).filter(x => x.published_time > '2026-05-20')
                     models.sort((a, b) => a.published_time < b.published_time ? 1 : -1)
                     const elements = models.map(x => ({ tag: 'button', text: { tag: 'plain_text', content: x.name }, type: 'primary', width: 'default', size: 'medium', behaviors: [{ type: 'callback', value: { action: 'set_model', model: x.model, meta: x } }] }))
-                    const res = await client.cardkit.v1.card.create({ data: { type: 'card_json', data: JSON.stringify({ schema: '2.0', body: { elements } }) } })
+                    const res = await createCardWithLogging('models', { data: { type: 'card_json', data: JSON.stringify({ schema: '2.0', body: { elements } }) } })
                     card_id = res.data.card_id
                   })
                   responseTitle = '模型列表'
