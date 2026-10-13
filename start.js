@@ -229,21 +229,9 @@ const { attachTaskSummary } = require('./task-summary')
           if (!task) {
             return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
           }
-          // WS card-action handlers ignore their return value; create a supported detail card and reply to the clicked message.
-          const created = await createCardWithLogging('task-detail-from-list', {
-            data: { type: 'card_json', data: JSON.stringify(taskDetailCard(task).card.data) }
-          })
-          if (!created.data?.card_id) throw new Error('飞书未能创建任务详情卡片')
-          const sent = await client.im.v1.message.reply({
-            path: { message_id: data.context.open_message_id },
-            data: {
-              receive_id: data.context.open_chat_id,
-              content: JSON.stringify({ type: 'card', data: { card_id: created.data.card_id } }),
-              msg_type: 'interactive'
-            }
-          })
-          console.log('[card.action.trigger] task detail reply:', JSON.stringify(sent))
-          return
+          // Returning a card from the card-action callback updates the existing card in place.
+          // The callback event does not include a card_id, so do not call CardKit card.update here.
+          return taskDetailCard(task)
         }
         if (value.action === 'continue_task') {
           const task = agentStore.getTask(value.id)
