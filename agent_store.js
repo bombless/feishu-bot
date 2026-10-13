@@ -30,13 +30,16 @@ class AgentStore {
       senderId: senderId || null,
       cwd,
       prompt,
+      summary: '',
       status: 'queued',
       createdAt: now,
       startedAt: null,
       finishedAt: null,
       exitCode: null,
       output: '',
-      error: ''
+      error: '',
+      trace: [],
+      messages: []
     }
     this.data.tasks.unshift(task)
     this.save()
