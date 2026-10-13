@@ -40,6 +40,77 @@ class Chat {
       },}).then(x => x.json())
   }
 
+  // 非流式轻量请求：供余额/额度检测使用，不建立流式连接。
+  async testQuota (prompt = '你好', signal) {
+    const messages = this.messages.filter(m => m.role === 'system')
+    messages.push({ role: 'user', content: prompt })
+    const resp = await fetch(this.url, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+        ...this.extraHeaders
+      },
+      body: JSON.stringify({ model: this.model, messages, stream: false })
+    })
+    const text = await resp.text().catch(() => '')
+    let json
+    try { json = JSON.parse(text) } catch {}
+    const errorCode = String(json?.error?.code || '')
+    const errorMessage = String(json?.error?.message || json?.error?.msg || '')
+    if (/insufficient[_ -]?quota|quota[_ -]?exceeded/i.test(errorCode + ' ' + errorMessage) || /额度不足|余额不足|insufficient balance/i.test(errorMessage)) {
+      throw new Error('insufficient_quota')
+    }
+    if (!resp.ok) throw new Error(`Chat request failed ${resp.status}: ${errorMessage || text}`)
+    if (json?.error) throw new Error(`${errorCode || 'api_error'}: ${errorMessage}`)
+    return json
+  }
+
+  // Agent loop 使用完整 JSON 响应，避免 SSE 分块解析。
+  async requestOnce (signal) {
+    const systemMsgs = this.messages.filter(m => m.role === 'system')
+    const turnMsgs = this.messages.filter(m => m.role !== 'system')
+    const reqMessages = [...systemMsgs, ...turnMsgs.slice(-this.maxHistory * 2)]
+    const resp = await fetch(this.url, {
+      method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}`, ...this.extraHeaders },
+      body: JSON.stringify({ tools: this.tools || [], model: this.model, messages: reqMessages, stream: false })
+    })
+    const bodyText = await resp.text().catch(() => '')
+    let json
+    try { json = JSON.parse(bodyText) } catch {}
+    const errorCode = String(json?.error?.code || '')
+    const errorMessage = String(json?.error?.message || json?.error?.msg || '')
+    if (/insufficient[_ -]?quota|quota[_ -]?exceeded/i.test(errorCode + ' ' + errorMessage) || /额度不足|余额不足/i.test(errorMessage)) throw new Error('insufficient_quota')
+    if (!resp.ok) throw new Error(`Chat request failed ${resp.status}: ${errorMessage || bodyText}`)
+    if (json?.error) throw new Error(`${errorCode || 'api_error'}: ${errorMessage}`)
+    const choice = json?.choices?.[0]
+    const message = choice?.message || {}
+    const text = typeof message.content === 'string' ? message.content : ''
+    const calls = (message.tool_calls || []).map(call => ({
+      id: call.id,
+      name: call.function?.name,
+      arguments: typeof call.function?.arguments === 'string' ? JSON.parse(call.function.arguments || '{}') : (call.function?.arguments || {})
+    }))
+    if (calls.length) {
+      this.messages.push({ role: 'assistant', tool_calls: message.tool_calls })
+    } else {
+      this.messages.push({ role: 'assistant', content: text })
+    }
+    return { text, calls }
+  }
+
+  async askOnce (prompt, signal) {
+    this.messages.push({ role: 'user', content: prompt })
+    return this.requestOnce(signal)
+  }
+
+  async reportCallsOnce (calls, signal) {
+    for (const call of calls) this.messages.push({ role: 'tool', tool_call_id: call.id, content: call.content })
+    return this.requestOnce(signal)
+  }
+
   /** 清空对话历史（保留 system） */
   reset () {
     this.messages = this.messages.filter(m => m.role === 'system')
@@ -115,6 +186,12 @@ class Chat {
           const json = JSON.parse(data);
           console.warn(json)
           
+          if (json?.error) {
+            const errorCode = String(json.error.code || '')
+            const errorMessage = String(json.error.message || json.error.msg || '')
+            if (/insufficient[_ -]?quota|quota[_ -]?exceeded/i.test(errorCode + ' ' + errorMessage) || /额度不足|余额不足/i.test(errorMessage)) throw new Error('insufficient_quota')
+            throw new Error(`${errorCode || 'api_error'}: ${errorMessage}`)
+          }
           const choice = json?.choices?.[0];
           const delta = choice?.delta;
 
@@ -168,6 +245,7 @@ class Chat {
             yield 't' + content
           }
         } catch (e) {
+          if (e?.message === 'insufficient_quota') throw e
           console.log('???')
           console.error(e)
           // 忽略不完整/心跳行
