@@ -28,7 +28,7 @@ async function consumeTurn (iterator) {
   return { text, calls }
 }
 
-async function runChatTask (store, task, config) {
+async function runChatTask (store, task, config, onComplete) {
   const continuing = Boolean(task.continuePrompt && Array.isArray(task.messages) && task.messages.length)
   store.updateTask(task.id, {
     status: 'running', startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: '',
@@ -60,7 +60,10 @@ async function runChatTask (store, task, config) {
     }
     for (let round = 0; round < maxRounds; round++) {
       if (!turn.calls.length) {
-        store.updateTask(task.id, { status: 'succeeded', finishedAt: new Date().toISOString(), exitCode: 0, output: turn.text, error: '', trace, messages: chat.messages })
+        const updated = store.updateTask(task.id, { status: 'succeeded', finishedAt: new Date().toISOString(), exitCode: 0, output: turn.text, error: '', trace, messages: chat.messages })
+        if (typeof onComplete === 'function') {
+          try { await onComplete(updated) } catch (e) { console.error('onComplete error:', e) }
+        }
         return
       }
       const results = []
@@ -87,7 +90,10 @@ async function runChatTask (store, task, config) {
     }
     throw new Error('达到工具调用轮数上限（' + maxRounds + '），任务已停止以避免无限循环。')
   } catch (error) {
-    store.updateTask(task.id, { status: 'failed', finishedAt: new Date().toISOString(), exitCode: 1, error: error && error.stack ? error.stack : String(error), trace, messages: chat.messages })
+    const updated = store.updateTask(task.id, { status: 'failed', finishedAt: new Date().toISOString(), exitCode: 1, error: error && error.stack ? error.stack : String(error), trace, messages: chat.messages })
+    if (typeof onComplete === 'function') {
+      try { await onComplete(updated) } catch (e) { console.error('onComplete error:', e) }
+    }
   }
 }
 

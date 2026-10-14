@@ -56,6 +56,31 @@ const { attachTaskSummary } = require('./task-summary')
   const chatState = new Map()
   const eventLog = new Map()
 
+  async function startRunTask (prompt, chatId, senderId, appConfig, chatModel) {
+    const cwd = appConfig.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
+    const task = agentStore.createTask({ chatId, senderId, cwd, prompt })
+    attachTaskSummary(agentStore, task, Object.assign({}, appConfig, { model: chatModel }))
+    
+    const onComplete = async (completedTask) => {
+      try {
+        const resultText = `Agent 任务执行完成\n\n**任务：** ${completedTask.prompt}\n**状态：** ${completedTask.status === 'succeeded' ? '✅ 成功' : '❌ 失败'}\n\n**输出结果：**\n` + (completedTask.output || completedTask.error || '(无输出)')
+        await client.im.v1.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'text',
+            content: JSON.stringify({ text: resultText.slice(-4000) })
+          }
+        })
+      } catch (notifyErr) {
+        console.error('发送任务完成通知失败:', notifyErr?.stack || notifyErr)
+      }
+    }
+
+    runChatTask(agentStore, task, Object.assign({}, appConfig, { model: chatModel }), onComplete)
+    return task
+  }
+
   function formatTask (task, includeHistory = false) {
     const output = (task.output || '').trim()
     const errorText = (task.error || '').trim()
@@ -339,8 +364,15 @@ const { attachTaskSummary } = require('./task-summary')
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
+        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'help']
+        const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
+
         try {
-          if (command === 'd' || command === 'ls' || command === 'dir') {
+          if (!isKnownCommand) {
+            const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
+            responseTitle = '模型 Agent 任务已自动开启'
+            responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+          } else if (command === 'd' || command === 'ls' || command === 'dir') {
             const target = cmd.slice(command.length).trim() || 'D:\\'
             const result = listDirectory(target)
             responseTitle = 'D盘目录'
@@ -365,12 +397,9 @@ const { attachTaskSummary } = require('./task-summary')
           } else if (command === 'run') {
             const prompt = cmd.slice(command.length).trim()
             if (!prompt) throw new Error('用法: run <任务描述>')
-            const cwd = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
-            const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt })
-            attachTaskSummary(agentStore, task, Object.assign({}, config, { model: chat.model }))
-            runChatTask(agentStore, task, Object.assign({}, config, { model: chat.model }))
+            const task = await startRunTask(prompt, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已开启'
-            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
+            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
             card_id = await createCardWithLogging('task-list', {
