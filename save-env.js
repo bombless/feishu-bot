@@ -1,6 +1,6 @@
 'use strict'
 
-const { saveEnv } = require('./env-util')
+const { saveEnv } = require('./config')
 
 saveEnv().catch(error => {
   console.error('保存环境变量失败:', error.message || error)
