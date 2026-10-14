@@ -2,6 +2,7 @@ const Chat = require('./chat')
 
 const TOOLS = [
   { type: 'function', function: { name: 'execute_powershell', description: '在 Windows agent 工作区内执行 PowerShell 脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 PowerShell 脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'execute_bash', description: '在 Linux agent 工作区内执行 Bash 命令或脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 Bash 命令或脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
   { type: 'function', function: { name: 'test_proxy_7897', description: '测试本机 HTTP 代理 127.0.0.1:7897 是否可连接，并通过代理请求指定 URL', parameters: { type: 'object', properties: { url: { type: 'string', description: '要通过代理访问的绝对 HTTP 或 HTTPS URL，例如 https://www.google.com' } }, required: ['url'], additionalProperties: false } } },
   { type: 'function', function: { name: 'get_system_info', description: '获取运行环境和 agent 工作区信息', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
   { type: 'function', function: { name: 'list_directory', description: '列出 agent 工作区内的目录内容', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区内目录的绝对路径' } }, required: ['path'], additionalProperties: false } } },
@@ -44,6 +45,7 @@ async function runChatTask (store, task, config) {
       '你是一个可以调用本地 agent 工具的任务执行助手。',
       '需要事实、文件或环境信息时优先使用工具，不要虚构工具执行结果。',
       '工具只能访问 AGENT_WORKSPACE 指定的工作区。遇到工具错误时说明错误并尝试安全的替代方案。',
+      '在 Windows 环境下使用 execute_powershell 执行脚本，在 Linux 环境下使用 execute_bash 执行脚本。',
       '天气查询可使用 Open-Meteo 工具：当前天气/预报用 get_weather_forecast，历史逐日数据用 get_historical_weather，地点解析用 geocode_location。统计“晴天”时先说明采用的天气代码或日照时长标准。',
       '完成任务后用中文简洁总结结果；若用户要求查询实时/外部信息而工具不具备联网能力，应明确说明限制。'
     ].join('\n')

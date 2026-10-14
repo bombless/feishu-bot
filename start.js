@@ -6,8 +6,8 @@ const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
 const AgentStore = require('./agent_store')
 const { runChatTask } = require('./agent_runner')
-const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
-const { getConfig } = require('./config')
+const { listDirectory, normalizeCwd, runCodex } = require('./agent_server')
+const { getConfig } = require('./env-util')
 const { attachTaskSummary } = require('./task-summary')
 
 ;(async () => {
@@ -53,7 +53,6 @@ const { attachTaskSummary } = require('./task-summary')
     }
   }
   const agentStore = new AgentStore()
-  createAgentServer({ store: agentStore, config })
   const chatState = new Map()
   const eventLog = new Map()
 
