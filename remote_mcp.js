@@ -35,6 +35,7 @@ class RemoteMcp {
   constructor () {
     this.connected = false
     this.tools = []
+    this.toolMap = new Map()
     this.accessToken = null
     this.refreshToken = null
     this.clientInfo = null
@@ -174,15 +175,19 @@ class RemoteMcp {
     await this._request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'feishu-bot', version: '1.0.0' } })
     await this._notify('notifications/initialized')
     const result = await this._request('tools/list')
-    this.tools = (result.tools || []).map(tool => ({
-      type: 'function',
-      function: {
-        name: 'mcp_' + tool.name.replace(/[^a-zA-Z0-9_-]/g, '_'),
-        description: '[远程 MCP] ' + (tool.description || tool.name),
-        parameters: tool.inputSchema || { type: 'object', properties: {} }
-      },
-      _mcpName: tool.name
-    }))
+    this.toolMap = new Map()
+    this.tools = (result.tools || []).map(tool => {
+      const exposedName = 'mcp_' + tool.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+      this.toolMap.set(exposedName, tool.name)
+      return {
+        type: 'function',
+        function: {
+          name: exposedName,
+          description: '[远程 MCP] ' + (tool.description || tool.name),
+          parameters: tool.inputSchema || { type: 'object', properties: {} }
+        }
+      }
+    })
     this.connected = true
   }
 
@@ -198,14 +203,15 @@ class RemoteMcp {
 
   async callTool (name, args) {
     if (!this.connected) throw new Error('远程 MCP 尚未连接')
-    const tool = this.tools.find(item => item.function.name === name)
-    if (!tool) throw new Error('未知 MCP 工具: ' + name)
-    return this._request('tools/call', { name: tool._mcpName, arguments: args || {} })
+    const remoteName = this.toolMap.get(name)
+    if (!remoteName) throw new Error('未知 MCP 工具: ' + name)
+    return this._request('tools/call', { name: remoteName, arguments: args || {} })
   }
 
   async disconnect () {
     this.connected = false
     this.tools = []
+    this.toolMap.clear()
     this.accessToken = null
     this.refreshToken = null
     this.sessionId = null
