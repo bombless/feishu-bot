@@ -1,4 +1,5 @@
 const Chat = require('./chat')
+const remoteMcp = require('./remote_mcp')
 
 const TOOLS = [
   { type: 'function', function: { name: 'execute_powershell', description: '在 Windows agent 工作区内执行 PowerShell 脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 PowerShell 脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
@@ -39,7 +40,7 @@ async function runChatTask (store, task, config) {
     apiKey: config.apiKey,
     model: config.model,
     modelsUrl: config.modelsUrl,
-    tools: TOOLS,
+    tools: [...TOOLS, ...(remoteMcp.connected ? remoteMcp.tools : [])],
     system: [
       '你是一个可以调用本地 agent 工具的任务执行助手。',
       '需要事实、文件或环境信息时优先使用工具，不要虚构工具执行结果。',
@@ -65,10 +66,15 @@ async function runChatTask (store, task, config) {
       for (const call of turn.calls) {
         const item = { round: round + 1, id: call.id, name: call.name, arguments: call.arguments, startedAt: new Date().toISOString() }
         try {
-          if (!TOOLS.some(t => t.function.name === call.name)) throw new Error('模型请求了未注册的工具: ' + call.name)
-          const { runAgentTool, AgentRequestSchema } = await import('@bombless/agent-lib')
-          const request = AgentRequestSchema.parse({ type: 'request', id: call.id, tool: call.name, args: call.arguments || {} })
-          const result = await runAgentTool(request.tool, request.args, { logCommand: (command, cwd) => console.log('[agent-lib]', command, cwd || '') })
+          let result
+          if (remoteMcp.connected && remoteMcp.tools.some(t => t.function.name === call.name)) {
+            result = await remoteMcp.callTool(call.name, call.arguments || {})
+          } else {
+            if (!TOOLS.some(t => t.function.name === call.name)) throw new Error('模型请求了未注册的工具: ' + call.name)
+            const { runAgentTool, AgentRequestSchema } = await import('@bombless/agent-lib')
+            const request = AgentRequestSchema.parse({ type: 'request', id: call.id, tool: call.name, args: call.arguments || {} })
+            result = await runAgentTool(request.tool, request.args, { logCommand: (command, cwd) => console.log('[agent-lib]', command, cwd || '') })
+          }
           item.status = 'succeeded'
           item.result = stringifyResult(result)
         } catch (error) {
