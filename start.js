@@ -349,18 +349,16 @@ const { attachTaskSummary } = require('./task-summary')
           if (command === 'mcp') {
             const action = (parts[1] || 'status').toLowerCase()
             if (action === 'connect') {
-              responseTitle = '正在连接远程 MCP'
-              responseContent = '浏览器将打开 OAuth 授权页。请在网页中完成登录和六位数 2FA 验证；授权完成后机器人会自动发现工具。此过程可能需要几分钟。'
-              // Send the authorization URL to the chat so 2FA can be completed even if the bot host has no desktop browser.
-              remoteMcp.onAuthUrl = url => client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: '请打开以下 OAuth 链接并完成网页中的六位数 2FA 验证：\\n' + url }) } }).catch(error => console.error('[MCP] send OAuth URL failed:', error?.message || error))
-              // Start authorization without blocking the Feishu reply; completion/failure is reported asynchronously.
-              remoteMcp.connect().then(result => {
-                const report = '远程 MCP 已连接，发现 ' + result.tools + ' 个工具。可用 mcp status 查看状态。'
-                return client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: report }) } })
-              }).catch(error => {
-                console.error('[MCP] connect failed:', error?.stack || error)
-                return client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: '远程 MCP 连接失败：' + error.message }) } }).catch(() => {})
-              })
+              const result = await remoteMcp.connect()
+              responseTitle = result.connected ? '远程 MCP 已连接' : '远程 MCP 等待 2FA 验证'
+              responseContent = result.connected
+                ? '已连接，发现 ' + result.tools + ' 个工具。'
+                : '无需打开网页。请在 5 分钟内直接发送命令：\\nmcp otp 123456\\n将 123456 替换为 Authenticator 当前显示的六位数字。'
+            } else if (action === 'otp') {
+              const code = parts[2] || ''
+              const result = await remoteMcp.submitTotp(code)
+              responseTitle = '远程 MCP 已连接'
+              responseContent = 'OAuth 验证成功，已发现 ' + result.tools + ' 个工具。Agent Loop 现在可以调用这些远程工具。'
             } else if (action === 'disconnect') {
               await remoteMcp.disconnect()
               responseTitle = '远程 MCP 已断开'
@@ -372,7 +370,7 @@ const { attachTaskSummary } = require('./task-summary')
                 ? '已连接，发现 ' + status.tools.length + ' 个工具：\\n' + status.tools.join('\\n')
                 : '当前未连接。发送 mcp connect 开始 OAuth 授权。'
             } else {
-              throw new Error('用法：mcp connect | mcp disconnect | mcp status')
+              throw new Error('用法：mcp connect | mcp otp <六位数字> | mcp disconnect | mcp status')
             }
           } else if (command === 'd' || command === 'ls' || command === 'dir') {
             const target = cmd.slice(command.length).trim() || 'D:\\'
@@ -445,7 +443,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nmcp connect/disconnect/status 连接、断开和查看远程 MCP；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nmcp connect/otp <六位数字>/disconnect/status 连接、输入 2FA 验证码、断开和查看远程 MCP；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
