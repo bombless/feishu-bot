@@ -44,6 +44,17 @@ class RemoteMcp {
     this.pendingAuth = null
   }
 
+  async restoreStoredSession () {
+    const saved = await keytar.getPassword(SERVICE, ACCOUNT)
+    if (!saved) return false
+    const tokens = JSON.parse(saved)
+    this.accessToken = tokens.access_token
+    this.refreshToken = tokens.refresh_token || null
+    this.clientInfo = tokens.client_info || null
+    await this._initialize()
+    return true
+  }
+
   async connect () {
     if (this.pendingAuth) return this.pendingAuth
     this.pendingAuth = this._connect().finally(() => { this.pendingAuth = null })
