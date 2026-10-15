@@ -113,7 +113,7 @@ class RemoteMcp {
           res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end('OAuth failed: ' + url.searchParams.get('error'))
           clearTimeout(timer); server.close()
-          return reject(new Error('OAuth 授权失败：' + url.searchParams.get('error_description', url.searchParams.get('error'))))
+          return reject(new Error('OAuth 授权失败：' + (url.searchParams.get('error_description') || url.searchParams.get('error'))))
         }
         const code = url.searchParams.get('code')
         if (!code) { res.writeHead(400); return res.end('Missing code') }
@@ -125,6 +125,7 @@ class RemoteMcp {
       server.listen(43127, '127.0.0.1', () => {
         openBrowser(authorize.toString())
         console.log('[MCP] OAuth URL: ' + authorize.toString())
+        if (typeof this.onAuthUrl === 'function') this.onAuthUrl(authorize.toString())
       })
     })
 
