@@ -21,7 +21,7 @@ async function getJson (url) {
 }
 function wellKnown (base, suffix) {
   const u = new URL(base)
-  return u.origin + '/.well-known/' + suffix + (u.pathname === '/' ? '' : u.pathname.replace(/\/$/, ''))
+  return u.origin + '/.well-known/' + suffix
 }
 
 class RemoteMcp {
