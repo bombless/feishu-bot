@@ -28,7 +28,7 @@ async function consumeTurn (iterator) {
   return { text, calls }
 }
 
-async function runChatTask (store, task, config, onComplete) {
+async function runChatTask (store, task, config, onComplete, onLoopMessage) {
   const continuing = Boolean(task.continuePrompt && Array.isArray(task.messages) && task.messages.length)
   store.updateTask(task.id, {
     status: 'running', startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: '',
@@ -54,7 +54,20 @@ async function runChatTask (store, task, config, onComplete) {
   const trace = continuing ? [...(task.trace || [])] : []
   const maxRounds = 12
   try {
+    let publishedMessageIndex = chat.messages.length
+    const publishNewMessages = async () => {
+      const end = chat.messages.length
+      for (; publishedMessageIndex < end; publishedMessageIndex++) {
+        const message = chat.messages[publishedMessageIndex]
+        if (message.role === 'system') continue
+        if (typeof onLoopMessage === 'function') {
+          try { await onLoopMessage(task.id, message, publishedMessageIndex, chat.messages) } catch (e) { console.error('onLoopMessage error:', e) }
+        }
+      }
+    }
     let turn = await chat.askOnce(continuing ? task.continuePrompt : task.prompt)
+    store.updateTask(task.id, { messages: chat.messages })
+    await publishNewMessages()
     if (continuing) {
       store.updateTask(task.id, { prompt: task.prompt + '\n\n追问：' + task.continuePrompt, continuePrompt: null })
     }
@@ -87,6 +100,7 @@ async function runChatTask (store, task, config, onComplete) {
       }
       turn = await chat.reportCallsOnce(results)
       store.updateTask(task.id, { trace, messages: chat.messages, output: turn.text })
+      await publishNewMessages()
     }
     throw new Error('达到工具调用轮数上限（' + maxRounds + '），任务已停止以避免无限循环。')
   } catch (error) {
