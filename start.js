@@ -58,20 +58,82 @@ const { attachTaskSummary } = require('./task-summary')
 
   const taskThreadQueues = new Map()
 
-  function formatLoopMessage (message, index) {
-    const role = message.role === 'user' ? '用户输入' : message.role === 'assistant' ? 'Agent 助手' : message.role === 'tool' ? '工具结果' : message.role
-    const parts = [`消息 ${index + 1} · ${role}`]
-    if (message.tool_calls?.length) {
-      for (const call of message.tool_calls) {
-        const name = call.function?.name || '未知工具'
-        const rawArgs = call.function?.arguments
-        const args = typeof rawArgs === 'object' && rawArgs !== null ? JSON.stringify(rawArgs) : (rawArgs || '{}')
-        parts.push(`工具请求：${name}\n参数：${args}`)
+  function extractThreadItems (messages) {
+    if (!Array.isArray(messages)) return []
+    const toolCallsMap = new Map()
+    for (const msg of messages) {
+      if (msg?.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+        for (const call of msg.tool_calls) {
+          if (call?.id) {
+            toolCallsMap.set(call.id, {
+              name: call.function?.name || '未知工具',
+              arguments: call.function?.arguments
+            })
+          }
+        }
       }
     }
-    if (typeof message.content === 'string' && message.content) parts.push(message.content)
-    if (message.tool_call_id) parts.push(`工具调用 ID：${message.tool_call_id}`)
-    return truncateMarkdown(parts.join('\n\n'), 18 * 1024)
+
+    const items = []
+    for (const msg of messages) {
+      if (!msg || msg.role === 'system') continue
+
+      if (msg.role === 'user') {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        items.push({
+          type: 'user',
+          title: '💬 用户输入',
+          content: content.trim()
+        })
+      } else if (msg.role === 'assistant') {
+        if (typeof msg.content === 'string' && msg.content.trim()) {
+          items.push({
+            type: 'assistant',
+            title: '🤖 Agent 助手',
+            content: msg.content.trim()
+          })
+        }
+        if (Array.isArray(msg.tool_calls)) {
+          for (const call of msg.tool_calls) {
+            const toolName = call.function?.name || '未知工具'
+            const rawArgs = call.function?.arguments
+            let formattedArgs = ''
+            try {
+              const parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : (rawArgs || {})
+              formattedArgs = JSON.stringify(parsed, null, 2)
+            } catch {
+              formattedArgs = String(rawArgs || '{}')
+            }
+            items.push({
+              type: 'tool_call',
+              title: `🛠️ 工具调用 · ${toolName}`,
+              content: formattedArgs ? `参数：\n${formattedArgs}` : '无参数'
+            })
+          }
+        }
+      } else if (msg.role === 'tool') {
+        const callInfo = msg.tool_call_id ? toolCallsMap.get(msg.tool_call_id) : null
+        const toolName = callInfo?.name || '未知工具'
+        const rawContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        items.push({
+          type: 'tool_result',
+          title: `📋 工具结果 · ${toolName}`,
+          content: rawContent.trim()
+        })
+      }
+    }
+    return items
+  }
+
+  function formatThreadItem (item, index, total) {
+    const header = `【${item.title}】（${index + 1}/${total}）`
+    let body = (item.content || '').trim()
+    if (!body) body = '(无内容)'
+    const maxLen = 16 * 1024
+    if (Buffer.byteLength(body, 'utf8') > maxLen) {
+      body = body.slice(0, 4000) + '\n\n…（内容过长，已截断展示）'
+    }
+    return `${header}\n\n${body}`
   }
 
   function queueTaskThreadSync (taskId) {
@@ -81,39 +143,38 @@ const { attachTaskSummary } = require('./task-summary')
         const task = agentStore.getTask(taskId)
         if (!task?.threadRootMessageId) return
         const messages = Array.isArray(task.messages) ? task.messages : []
+        const items = extractThreadItems(messages)
         const cursor = Number(task.threadPublishedMessageIndex) || 0
-        if (cursor >= messages.length) return
-        const message = messages[cursor]
-        if (message.role !== 'system') {
-          const text = formatLoopMessage(message, cursor)
-          const replyRes = await client.im.v1.message.reply({
-            path: { message_id: task.threadRootMessageId },
-            data: {
-              msg_type: 'text',
-              content: JSON.stringify({ text }),
-              reply_in_thread: true
-            }
-          })
-          if (replyRes?.code && replyRes.code !== 0) {
-            console.error(`[task.thread:${taskId}] reply failed (code ${replyRes.code}): ${replyRes.msg}`)
-            if (replyRes.code === 230071) {
-              const fallbackRes = await client.im.v1.message.reply({
-                path: { message_id: task.threadRootMessageId },
-                data: {
-                  msg_type: 'text',
-                  content: JSON.stringify({ text })
-                }
-              })
-              if (fallbackRes?.code && fallbackRes.code !== 0) {
-                console.error(`[task.thread:${taskId}] fallback reply failed (code ${fallbackRes.code}): ${fallbackRes.msg}`)
-                return
+        if (cursor >= items.length) return
+        const item = items[cursor]
+        const text = formatThreadItem(item, cursor, items.length)
+        const replyRes = await client.im.v1.message.reply({
+          path: { message_id: task.threadRootMessageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+            reply_in_thread: true
+          }
+        })
+        if (replyRes?.code && replyRes.code !== 0) {
+          console.error(`[task.thread:${taskId}] reply failed (code ${replyRes.code}): ${replyRes.msg}`)
+          if (replyRes.code === 230071) {
+            const fallbackRes = await client.im.v1.message.reply({
+              path: { message_id: task.threadRootMessageId },
+              data: {
+                msg_type: 'text',
+                content: JSON.stringify({ text })
               }
-            } else {
+            })
+            if (fallbackRes?.code && fallbackRes.code !== 0) {
+              console.error(`[task.thread:${taskId}] fallback reply failed (code ${fallbackRes.code}): ${fallbackRes.msg}`)
               return
             }
+          } else {
+            return
           }
-          await new Promise(resolve => setTimeout(resolve, 220))
         }
+        await new Promise(resolve => setTimeout(resolve, 220))
         agentStore.updateTask(taskId, { threadPublishedMessageIndex: cursor + 1 })
       }
     }).catch(error => {
@@ -425,7 +486,32 @@ const { attachTaskSummary } = require('./task-summary')
           if (task.status === 'running' || task.status === 'queued') return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务仍在运行中，请完成后再继续追问。' }] } }, type: 'raw' } }
           if (!Array.isArray(task.messages) || !task.messages.length) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务没有可续接的 Agent 对话历史。' }] } }, type: 'raw' } }
           agentStore.updateTask(task.id, { continuePrompt: prompt })
-          runChatTask(agentStore, agentStore.getTask(task.id), Object.assign({}, config, { model: chat.model }))
+          const onFollowupComplete = async (completedTask) => {
+            try {
+              if (taskThreadQueues.has(completedTask.id)) {
+                try { await taskThreadQueues.get(completedTask.id) } catch (queueErr) {
+                  console.error(`[task.thread:${completedTask.id}] queue wait error:`, queueErr?.stack || queueErr)
+                }
+              }
+              const resultText = `Agent 追问执行完成\n\n**任务：** ${completedTask.prompt}\n**状态：** ${completedTask.status === 'succeeded' ? '✅ 成功' : '❌ 失败'}\n\n**输出结果：**\n` + (completedTask.output || completedTask.error || '(无输出)')
+              const latestTask = agentStore.getTask(completedTask.id)
+              if (latestTask?.threadRootMessageId) {
+                const replyRes = await client.im.v1.message.reply({
+                  path: { message_id: latestTask.threadRootMessageId },
+                  data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }), reply_in_thread: true }
+                })
+                if (replyRes?.code === 230071) {
+                  await client.im.v1.message.reply({
+                    path: { message_id: latestTask.threadRootMessageId },
+                    data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }) }
+                  })
+                }
+              }
+            } catch (notifyErr) {
+              console.error('发送追问完成通知失败:', notifyErr?.stack || notifyErr)
+            }
+          }
+          runChatTask(agentStore, agentStore.getTask(task.id), Object.assign({}, config, { model: chat.model }), onFollowupComplete, async (taskId) => queueTaskThreadSync(taskId))
           return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `已提交追问，正在沿用原对话继续执行。\n\n**任务 ID：** ${task.id}\n\n完成后再次输入 id ${task.id} 查看结果或继续提问。` }] } }, type: 'raw' } }
         }
         if (value.action === 'd_directory') {
