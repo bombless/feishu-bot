@@ -347,6 +347,8 @@ const remoteMcp = require('./remote_mcp')
             if (action === 'connect') {
               responseTitle = '正在连接远程 MCP'
               responseContent = '浏览器将打开 OAuth 授权页。请在网页中完成登录和六位数 2FA 验证；授权完成后机器人会自动发现工具。此过程可能需要几分钟。'
+              // Send the authorization URL to the chat so 2FA can be completed even if the bot host has no desktop browser.
+              remoteMcp.onAuthUrl = url => client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: '请打开以下 OAuth 链接并完成网页中的六位数 2FA 验证：\\n' + url }) } }).catch(error => console.error('[MCP] send OAuth URL failed:', error?.message || error))
               // Start authorization without blocking the Feishu reply; completion/failure is reported asynchronously.
               remoteMcp.connect().then(result => {
                 const report = '远程 MCP 已连接，发现 ' + result.tools + ' 个工具。可用 mcp status 查看状态。'
