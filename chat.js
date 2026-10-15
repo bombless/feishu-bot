@@ -106,8 +106,20 @@ class Chat {
     return this.requestOnce(signal)
   }
 
-  async reportCallsOnce (calls, signal) {
+  async reportCallsOnce (calls, images = [], signal) {
     for (const call of calls) this.messages.push({ role: 'tool', tool_call_id: call.id, content: call.content })
+    if (images && images.length) {
+      const parts = [{ type: 'text', text: '以下是工具返回的图像数据，请结合图像进行分析回答：' }]
+      for (const img of images) {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${img.mimeType || 'image/jpeg'};base64,${img.data}`
+          }
+        })
+      }
+      this.messages.push({ role: 'user', content: parts })
+    }
     return this.requestOnce(signal)
   }
 
@@ -265,7 +277,7 @@ class Chat {
   }
 
   
-  async *reportCalls(calls, signal) {
+  async *reportCalls(calls, images = [], signal) {
     console.log('called reportCalls', calls)
     calls.forEach(c => {
       this.messages.push({
@@ -274,8 +286,18 @@ class Chat {
         content: c.content
       })
     })
-    
-    console.log(JSON.stringify(this.messages))
+    if (images && images.length) {
+      const parts = [{ type: 'text', text: '以下是工具返回的图像数据，请结合图像进行分析回答：' }]
+      for (const img of images) {
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${img.mimeType || 'image/jpeg'};base64,${img.data}`
+          }
+        })
+      }
+      this.messages.push({ role: 'user', content: parts })
+    }
     for await (const chunk of this.request(signal)) {
       yield chunk;
     }

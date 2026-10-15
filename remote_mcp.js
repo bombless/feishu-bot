@@ -1,10 +1,54 @@
 const crypto = require('node:crypto')
-const keytar = require('keytar')
+const fs = require('node:fs')
+const path = require('node:path')
+let keytar
+try {
+  keytar = require('keytar')
+} catch {}
 
 const ENDPOINT = 'https://bombless.duckdns.org/mcp'
 const SERVICE = 'feishu-bot-mcp'
 const ACCOUNT = 'oauth'
 const REDIRECT_URI = 'http://127.0.0.1:43127/oauth/callback'
+const TOKEN_FILE = process.env.MCP_AUTH_FILE || path.join(__dirname, 'data', 'mcp-oauth.json')
+
+async function saveStoredTokens (data) {
+  const json = typeof data === 'string' ? data : JSON.stringify(data)
+  if (keytar) {
+    try {
+      await keytar.setPassword(SERVICE, ACCOUNT, json)
+      return
+    } catch {}
+  }
+  fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true })
+  fs.writeFileSync(TOKEN_FILE, json, { encoding: 'utf8', mode: 0o600 })
+}
+
+async function getStoredTokens () {
+  if (keytar) {
+    try {
+      const saved = await keytar.getPassword(SERVICE, ACCOUNT)
+      if (saved) return saved
+    } catch {}
+  }
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      return fs.readFileSync(TOKEN_FILE, 'utf8')
+    }
+  } catch {}
+  return null
+}
+
+async function deleteStoredTokens () {
+  if (keytar) {
+    try {
+      await keytar.deletePassword(SERVICE, ACCOUNT)
+    } catch {}
+  }
+  try {
+    fs.rmSync(TOKEN_FILE, { force: true })
+  } catch {}
+}
 
 function base64url (value) { return Buffer.from(value).toString('base64url') }
 function random (bytes = 32) { return crypto.randomBytes(bytes).toString('base64url') }
@@ -42,37 +86,49 @@ class RemoteMcp {
   }
 
   async restoreStoredSession () {
-    const saved = await keytar.getPassword(SERVICE, ACCOUNT)
-    if (!saved) return false
-    const tokens = JSON.parse(saved)
-    this.accessToken = tokens.access_token
-    this.refreshToken = tokens.refresh_token || null
-    this.clientInfo = tokens.client_info || null
-    await this._initialize()
-    return true
+    try {
+      const saved = await getStoredTokens()
+      if (!saved) return false
+      const tokens = JSON.parse(saved)
+      this.accessToken = tokens.access_token
+      this.refreshToken = tokens.refresh_token || null
+      this.clientInfo = tokens.client_info || null
+      await this._initialize()
+      return true
+    } catch (error) {
+      this.accessToken = null
+      this.refreshToken = null
+      return false
+    }
   }
 
   async connect () {
     if (this.connected) return { connected: true, tools: this.tools.length, reusedToken: true }
-    const saved = await keytar.getPassword(SERVICE, ACCOUNT)
-    if (saved) {
-      try {
+    try {
+      const saved = await getStoredTokens()
+      if (saved) {
         const tokens = JSON.parse(saved)
         this.accessToken = tokens.access_token
         this.refreshToken = tokens.refresh_token || null
         this.clientInfo = tokens.client_info || null
         await this._initialize()
         return { connected: true, tools: this.tools.length, reusedToken: true }
-      } catch (error) {
-        this.accessToken = null
-        this.refreshToken = null
       }
+    } catch (error) {
+      this.accessToken = null
+      this.refreshToken = null
     }
     return this.startAuthorization()
   }
 
   async startAuthorization () {
-    if (this.pendingAuthorization) return { pending: true, message: '授权已开始，请在飞书发送 mcp otp <六位数字>' }
+    if (this.pendingAuthorization) {
+      if (Date.now() - this.pendingAuthorization.createdAt > 5 * 60 * 1000) {
+        this.pendingAuthorization = null
+      } else {
+        return { pending: true, message: '授权已开始，请在飞书发送 mcp otp <六位数字>' }
+      }
+    }
     const resourceMeta = await getJson(wellKnown(ENDPOINT, 'oauth-protected-resource'))
     const authServer = resourceMeta.authorization_servers?.[0] || new URL(ENDPOINT).origin
     const authMeta = await getJson(wellKnown(authServer, 'oauth-authorization-server'))
@@ -114,7 +170,8 @@ class RemoteMcp {
   }
 
   async submitTotp (code) {
-    if (!/^\\d{6}$/.test(String(code))) throw new Error('验证码必须是六位数字')
+    const normalizedCode = String(code).replace(/\s+/g, '').trim()
+    if (!/^\d{6}$/.test(normalizedCode)) throw new Error('验证码必须是六位数字')
     const pending = this.pendingAuthorization
     if (!pending || !this.authMeta) throw new Error('没有待完成的授权，请先发送 mcp connect')
     if (Date.now() - pending.createdAt > 5 * 60 * 1000) {
@@ -130,10 +187,10 @@ class RemoteMcp {
       method: 'POST',
       redirect: 'manual',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
-      body: new URLSearchParams({ totp: String(code) })
+      body: new URLSearchParams({ totp: normalizedCode })
     })
     if (response.status !== 302 && response.status !== 303) {
-      const body = (await response.text()).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim()
+      const body = (await response.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
       if (response.status === 401) throw new Error('验证码错误或已过期，请重新输入六位数字')
       throw new Error('OAuth 验证失败 (' + response.status + '): ' + body.slice(0, 300))
     }
@@ -158,8 +215,8 @@ class RemoteMcp {
     if (!tokens.access_token) throw new Error('OAuth token 响应缺少 access_token')
     this.accessToken = tokens.access_token
     this.refreshToken = tokens.refresh_token || null
-    await keytar.setPassword(SERVICE, ACCOUNT, JSON.stringify({ ...tokens, client_info: pending.clientInfo }))
     this.pendingAuthorization = null
+    await saveStoredTokens({ ...tokens, client_info: pending.clientInfo })
     await this._initialize()
     return { connected: true, tools: this.tools.length }
   }
@@ -234,7 +291,8 @@ class RemoteMcp {
     this.accessToken = null
     this.refreshToken = null
     this.sessionId = null
-    await keytar.deletePassword(SERVICE, ACCOUNT).catch(() => {})
+    this.pendingAuthorization = null
+    await deleteStoredTokens()
     return { connected: false }
   }
 

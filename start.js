@@ -84,7 +84,16 @@ const { attachTaskSummary } = require('./task-summary')
       if (!msg || msg.role === 'system') continue
 
       if (msg.role === 'user') {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        let content = ''
+        if (typeof msg.content === 'string') {
+          content = msg.content
+        } else if (Array.isArray(msg.content)) {
+          const textPart = msg.content.find(p => p.type === 'text')?.text || ''
+          const imgCount = msg.content.filter(p => p.type === 'image_url').length
+          content = imgCount > 0 ? `${textPart} [包含 ${imgCount} 张图片，已送入视觉模型分析]` : (textPart || JSON.stringify(msg.content || ''))
+        } else {
+          content = JSON.stringify(msg.content || '')
+        }
         items.push({
           type: 'user',
           title: '💬 用户输入',
@@ -589,9 +598,9 @@ const { attachTaskSummary } = require('./task-summary')
               responseTitle = result.connected ? '远程 MCP 已连接' : '远程 MCP 等待 2FA 验证'
               responseContent = result.connected
                 ? '已连接，发现 ' + result.tools + ' 个工具。'
-                : '无需打开网页。请在 5 分钟内直接发送命令：\\nmcp otp 123456\\n将 123456 替换为 Authenticator 当前显示的六位数字。'
+                : '请在 5 分钟内直接发送命令：\nmcp otp 123456\n将 123456 替换为 Authenticator 当前显示的六位数字。'
             } else if (action === 'otp') {
-              const code = parts[2] || ''
+              const code = parts.slice(2).join('')
               const result = await remoteMcp.submitTotp(code)
               responseTitle = '远程 MCP 已连接'
               responseContent = 'OAuth 验证成功，已发现 ' + result.tools + ' 个工具。Agent Loop 现在可以调用这些远程工具。'
@@ -603,7 +612,7 @@ const { attachTaskSummary } = require('./task-summary')
               const status = remoteMcp.status()
               responseTitle = '远程 MCP 状态'
               responseContent = status.connected
-                ? '已连接，发现 ' + status.tools.length + ' 个工具：\\n' + status.tools.join('\\n')
+                ? '已连接，发现 ' + status.tools.length + ' 个工具：\n' + status.tools.join('\n')
                 : '当前未连接。发送 mcp connect 开始 OAuth 授权。'
             } else {
               throw new Error('用法：mcp connect | mcp otp <六位数字> | mcp disconnect | mcp status')
