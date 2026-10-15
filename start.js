@@ -9,6 +9,7 @@ const { runChatTask } = require('./agent_runner')
 const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./config')
 const { attachTaskSummary } = require('./task-summary')
+const remoteMcp = require('./remote_mcp')
 
 ;(async () => {
   const config = await getConfig()
@@ -341,7 +342,33 @@ const { attachTaskSummary } = require('./task-summary')
         const command = parts[0].toLowerCase()
 
         try {
-          if (command === 'd' || command === 'ls' || command === 'dir') {
+          if (command === 'mcp') {
+            const action = (parts[1] || 'status').toLowerCase()
+            if (action === 'connect') {
+              responseTitle = '正在连接远程 MCP'
+              responseContent = '浏览器将打开 OAuth 授权页。请在网页中完成登录和六位数 2FA 验证；授权完成后机器人会自动发现工具。此过程可能需要几分钟。'
+              // Start authorization without blocking the Feishu reply; completion/failure is reported asynchronously.
+              remoteMcp.connect().then(result => {
+                const report = '远程 MCP 已连接，发现 ' + result.tools + ' 个工具。可用 mcp status 查看状态。'
+                return client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: report }) } })
+              }).catch(error => {
+                console.error('[MCP] connect failed:', error?.stack || error)
+                return client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, msg_type: 'text', content: JSON.stringify({ text: '远程 MCP 连接失败：' + error.message }) } }).catch(() => {})
+              })
+            } else if (action === 'disconnect') {
+              await remoteMcp.disconnect()
+              responseTitle = '远程 MCP 已断开'
+              responseContent = '已清除本机保存的 OAuth token，并停止向 Agent 提供远程工具。'
+            } else if (action === 'status') {
+              const status = remoteMcp.status()
+              responseTitle = '远程 MCP 状态'
+              responseContent = status.connected
+                ? '已连接，发现 ' + status.tools.length + ' 个工具：\\n' + status.tools.join('\\n')
+                : '当前未连接。发送 mcp connect 开始 OAuth 授权。'
+            } else {
+              throw new Error('用法：mcp connect | mcp disconnect | mcp status')
+            }
+          } else if (command === 'd' || command === 'ls' || command === 'dir') {
             const target = cmd.slice(command.length).trim() || 'D:\\'
             const result = listDirectory(target)
             responseTitle = 'D盘目录'
