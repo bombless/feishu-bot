@@ -6,8 +6,8 @@ const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
 const AgentStore = require('./agent_store')
 const { runChatTask } = require('./agent_runner')
-const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
-const { getConfig } = require('./config')
+const { listDirectory, normalizeCwd, runCodex } = require('./agent_server')
+const { getConfig } = require('./env-util')
 const { attachTaskSummary } = require('./task-summary')
 
 ;(async () => {
@@ -58,9 +58,182 @@ const { attachTaskSummary } = require('./task-summary')
     }
   }
   const agentStore = new AgentStore()
-  createAgentServer({ store: agentStore, config })
   const chatState = new Map()
   const eventLog = new Map()
+
+  const taskThreadQueues = new Map()
+
+  function extractThreadItems (messages) {
+    if (!Array.isArray(messages)) return []
+    const toolCallsMap = new Map()
+    for (const msg of messages) {
+      if (msg?.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+        for (const call of msg.tool_calls) {
+          if (call?.id) {
+            toolCallsMap.set(call.id, {
+              name: call.function?.name || '未知工具',
+              arguments: call.function?.arguments
+            })
+          }
+        }
+      }
+    }
+
+    const items = []
+    for (const msg of messages) {
+      if (!msg || msg.role === 'system') continue
+
+      if (msg.role === 'user') {
+        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        items.push({
+          type: 'user',
+          title: '💬 用户输入',
+          content: content.trim()
+        })
+      } else if (msg.role === 'assistant') {
+        if (typeof msg.content === 'string' && msg.content.trim()) {
+          items.push({
+            type: 'assistant',
+            title: '🤖 Agent 助手',
+            content: msg.content.trim()
+          })
+        }
+        if (Array.isArray(msg.tool_calls)) {
+          for (const call of msg.tool_calls) {
+            const toolName = call.function?.name || '未知工具'
+            const rawArgs = call.function?.arguments
+            let formattedArgs = ''
+            try {
+              const parsed = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : (rawArgs || {})
+              formattedArgs = JSON.stringify(parsed, null, 2)
+            } catch {
+              formattedArgs = String(rawArgs || '{}')
+            }
+            items.push({
+              type: 'tool_call',
+              title: `🛠️ 工具调用 · ${toolName}`,
+              content: formattedArgs ? `参数：\n${formattedArgs}` : '无参数'
+            })
+          }
+        }
+      } else if (msg.role === 'tool') {
+        const callInfo = msg.tool_call_id ? toolCallsMap.get(msg.tool_call_id) : null
+        const toolName = callInfo?.name || '未知工具'
+        const rawContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        items.push({
+          type: 'tool_result',
+          title: `📋 工具结果 · ${toolName}`,
+          content: rawContent.trim()
+        })
+      }
+    }
+    return items
+  }
+
+  function formatThreadItem (item, index, total) {
+    const header = `【${item.title}】（${index + 1}/${total}）`
+    let body = (item.content || '').trim()
+    if (!body) body = '(无内容)'
+    const maxLen = 16 * 1024
+    if (Buffer.byteLength(body, 'utf8') > maxLen) {
+      body = body.slice(0, 4000) + '\n\n…（内容过长，已截断展示）'
+    }
+    return `${header}\n\n${body}`
+  }
+
+  function queueTaskThreadSync (taskId) {
+    const previous = taskThreadQueues.get(taskId) || Promise.resolve()
+    const next = previous.then(async () => {
+      while (true) {
+        const task = agentStore.getTask(taskId)
+        if (!task?.threadRootMessageId) return
+        const messages = Array.isArray(task.messages) ? task.messages : []
+        const items = extractThreadItems(messages)
+        const cursor = Number(task.threadPublishedMessageIndex) || 0
+        if (cursor >= items.length) return
+        const item = items[cursor]
+        const text = formatThreadItem(item, cursor, items.length)
+        const replyRes = await client.im.v1.message.reply({
+          path: { message_id: task.threadRootMessageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+            reply_in_thread: true
+          }
+        })
+        if (replyRes?.code && replyRes.code !== 0) {
+          console.error(`[task.thread:${taskId}] reply failed (code ${replyRes.code}): ${replyRes.msg}`)
+          if (replyRes.code === 230071) {
+            const fallbackRes = await client.im.v1.message.reply({
+              path: { message_id: task.threadRootMessageId },
+              data: {
+                msg_type: 'text',
+                content: JSON.stringify({ text })
+              }
+            })
+            if (fallbackRes?.code && fallbackRes.code !== 0) {
+              console.error(`[task.thread:${taskId}] fallback reply failed (code ${fallbackRes.code}): ${fallbackRes.msg}`)
+              return
+            }
+          } else {
+            return
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 220))
+        agentStore.updateTask(taskId, { threadPublishedMessageIndex: cursor + 1 })
+      }
+    }).catch(error => {
+      console.error(`[task.thread:${taskId}] publish failed:`, error?.stack || error)
+    }).finally(() => {
+      if (taskThreadQueues.get(taskId) === next) taskThreadQueues.delete(taskId)
+    })
+    taskThreadQueues.set(taskId, next)
+    return next
+  }
+
+  async function startRunTask (prompt, chatId, senderId, appConfig, chatModel) {
+    const cwd = appConfig.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
+    const task = agentStore.createTask({ chatId, senderId, cwd, prompt })
+    attachTaskSummary(agentStore, task, Object.assign({}, appConfig, { model: chatModel }))
+    
+    const onComplete = async (completedTask) => {
+      try {
+        if (taskThreadQueues.has(completedTask.id)) {
+          try { await taskThreadQueues.get(completedTask.id) } catch (queueErr) {
+            console.error(`[task.thread:${completedTask.id}] queue wait error:`, queueErr?.stack || queueErr)
+          }
+        }
+        const resultText = `Agent 任务执行完成\n\n**任务：** ${completedTask.prompt}\n**状态：** ${completedTask.status === 'succeeded' ? '✅ 成功' : '❌ 失败'}\n\n**输出结果：**\n` + (completedTask.output || completedTask.error || '(无输出)')
+        const latestTask = agentStore.getTask(completedTask.id)
+        if (latestTask?.threadRootMessageId) {
+          const replyRes = await client.im.v1.message.reply({
+            path: { message_id: latestTask.threadRootMessageId },
+            data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }), reply_in_thread: true }
+          })
+          if (replyRes?.code === 230071) {
+            await client.im.v1.message.reply({
+              path: { message_id: latestTask.threadRootMessageId },
+              data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }) }
+            })
+          }
+        } else {
+          await client.im.v1.message.create({
+            params: { receive_id_type: 'chat_id' },
+            data: {
+              receive_id: chatId,
+              msg_type: 'text',
+              content: JSON.stringify({ text: resultText.slice(-4000) })
+            }
+          })
+        }
+      } catch (notifyErr) {
+        console.error('发送任务完成通知失败:', notifyErr?.stack || notifyErr)
+      }
+    }
+
+    runChatTask(agentStore, task, Object.assign({}, appConfig, { model: chatModel }), onComplete, async (taskId) => queueTaskThreadSync(taskId))
+    return task
+  }
 
   function formatTask (task, includeHistory = false) {
     const output = (task.output || '').trim()
@@ -126,8 +299,27 @@ const { attachTaskSummary } = require('./task-summary')
     }
     return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
   }
+  function truncateMarkdown (content, maxBytes = 20 * 1024) {
+    const text = String(content || '')
+    if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
+    const suffix = '\n\n…（Markdown 内容过长，已截断）'
+    const budget = Math.max(0, maxBytes - Buffer.byteLength(suffix, 'utf8'))
+    let truncated = ''
+    let bytes = 0
+    for (const char of text) {
+      const charBytes = Buffer.byteLength(char, 'utf8')
+      if (bytes + charBytes > budget) break
+      truncated += char
+      bytes += charBytes
+    }
+    return truncated + suffix
+  }
+
   function taskDetailCard (task) {
-    const content = formatTask(task, true) + '\n\n---\n\n### 继续追问\n输入补充要求后，点击下方按钮，机器人会沿用该任务已有的 Agent 对话继续执行。'
+    const threadNote = task.threadRootMessageId
+      ? '\n\n*(Agent 执行详情已同步至话题回复)*'
+      : '\n\n*(Agent 执行详情将同步至话题回复)*'
+    const content = truncateMarkdown(formatTask(task, false) + threadNote + '\n\n---\n\n### 继续追问\n输入补充要求后，点击下方按钮，机器人会沿用该任务已有的 Agent 对话继续执行。')
     const elements = [
       { tag: 'markdown', content },
       {
@@ -299,7 +491,32 @@ const { attachTaskSummary } = require('./task-summary')
           if (task.status === 'running' || task.status === 'queued') return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务仍在运行中，请完成后再继续追问。' }] } }, type: 'raw' } }
           if (!Array.isArray(task.messages) || !task.messages.length) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务没有可续接的 Agent 对话历史。' }] } }, type: 'raw' } }
           agentStore.updateTask(task.id, { continuePrompt: prompt })
-          runChatTask(agentStore, agentStore.getTask(task.id), Object.assign({}, config, { model: chat.model }))
+          const onFollowupComplete = async (completedTask) => {
+            try {
+              if (taskThreadQueues.has(completedTask.id)) {
+                try { await taskThreadQueues.get(completedTask.id) } catch (queueErr) {
+                  console.error(`[task.thread:${completedTask.id}] queue wait error:`, queueErr?.stack || queueErr)
+                }
+              }
+              const resultText = `Agent 追问执行完成\n\n**任务：** ${completedTask.prompt}\n**状态：** ${completedTask.status === 'succeeded' ? '✅ 成功' : '❌ 失败'}\n\n**输出结果：**\n` + (completedTask.output || completedTask.error || '(无输出)')
+              const latestTask = agentStore.getTask(completedTask.id)
+              if (latestTask?.threadRootMessageId) {
+                const replyRes = await client.im.v1.message.reply({
+                  path: { message_id: latestTask.threadRootMessageId },
+                  data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }), reply_in_thread: true }
+                })
+                if (replyRes?.code === 230071) {
+                  await client.im.v1.message.reply({
+                    path: { message_id: latestTask.threadRootMessageId },
+                    data: { msg_type: 'text', content: JSON.stringify({ text: resultText.slice(-4000) }) }
+                  })
+                }
+              }
+            } catch (notifyErr) {
+              console.error('发送追问完成通知失败:', notifyErr?.stack || notifyErr)
+            }
+          }
+          runChatTask(agentStore, agentStore.getTask(task.id), Object.assign({}, config, { model: chat.model }), onFollowupComplete, async (taskId) => queueTaskThreadSync(taskId))
           return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `已提交追问，正在沿用原对话继续执行。\n\n**任务 ID：** ${task.id}\n\n完成后再次输入 id ${task.id} 查看结果或继续提问。` }] } }, type: 'raw' } }
         }
         if (value.action === 'd_directory') {
@@ -342,11 +559,19 @@ const { attachTaskSummary } = require('./task-summary')
         let responseTitle
         let responseContent
         let card_id
+        let taskForThread = null
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
+        const KNOWN_COMMANDS = ['mcp', 'd', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'help']
+        const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
+
         try {
-          if (command === 'mcp') {
+          if (!isKnownCommand) {
+            const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
+            responseTitle = '模型 Agent 任务已自动开启'
+            responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+          } else if (command === 'mcp') {
             const action = (parts[1] || 'status').toLowerCase()
             if (action === 'connect') {
               const result = await remoteMcp.connect()
@@ -397,12 +622,9 @@ const { attachTaskSummary } = require('./task-summary')
           } else if (command === 'run') {
             const prompt = cmd.slice(command.length).trim()
             if (!prompt) throw new Error('用法: run <任务描述>')
-            const cwd = config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
-            const task = agentStore.createTask({ chatId: chat_id, senderId: sender?.sender_id?.open_id, cwd, prompt })
-            attachTaskSummary(agentStore, task, Object.assign({}, config, { model: chat.model }))
-            runChatTask(agentStore, task, Object.assign({}, config, { model: chat.model }))
+            const task = await startRunTask(prompt, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已开启'
-            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。'
+            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
             card_id = await createCardWithLogging('task-list', {
@@ -415,11 +637,14 @@ const { attachTaskSummary } = require('./task-summary')
           } else if (command === 'id' || command === 'taskinfo') {
             const task = agentStore.getTask(parts[1])
             if (!task) throw new Error('找不到任务: ' + (parts[1] || ''))
+            taskForThread = task
             responseTitle = '任务详情'
-            card_id = await createCardWithLogging('task-detail', {
+            responseContent = formatTask(task, false)
+            const detailRes = await createCardWithLogging('task-detail', {
               data: { type: 'card_json', data: JSON.stringify(taskDetailCard(task).card.data) }
-            }).then(res => res.data.card_id)
-            responseContent = null
+            })
+            card_id = (detailRes?.code === 0 && detailRes?.data?.card_id) ? detailRes.data.card_id : null
+            if (card_id) responseContent = null
           } else {
             switch (cmd) {
               case 'mine': {
@@ -455,7 +680,22 @@ const { attachTaskSummary } = require('./task-summary')
         const cardContent = card_id
           ? JSON.stringify({ type: 'card', data: { card_id } })
           : Lark.messageCard.defaultCard({ title: responseTitle, content: responseContent })
-        const ret = await client.im.v1.message.reply({ path: { message_id }, data: { receive_id: chat_id, content: cardContent, msg_type: 'interactive' } })
+        let ret
+        if (taskForThread) {
+          if (taskForThread.threadRootMessageId) {
+            ret = await client.im.v1.message.reply({ path: { message_id }, data: { receive_id: chat_id, content: cardContent, msg_type: 'interactive' } })
+            await queueTaskThreadSync(taskForThread.id)
+          } else {
+            ret = await client.im.v1.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chat_id, content: cardContent, msg_type: 'interactive' } })
+            const new_message_id = ret?.data?.message_id
+            if (new_message_id) {
+              agentStore.updateTask(taskForThread.id, { threadRootMessageId: new_message_id, threadPublishedMessageIndex: 0 })
+              await queueTaskThreadSync(taskForThread.id)
+            }
+          }
+        } else {
+          ret = await client.im.v1.message.reply({ path: { message_id }, data: { receive_id: chat_id, content: cardContent, msg_type: 'interactive' } })
+        }
         const new_message_id = ret?.data?.message_id
         const modu = chatState.get(chat_id)
         if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)

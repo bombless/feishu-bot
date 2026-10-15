@@ -94,7 +94,7 @@ class Chat {
       arguments: typeof call.function?.arguments === 'string' ? JSON.parse(call.function.arguments || '{}') : (call.function?.arguments || {})
     }))
     if (calls.length) {
-      this.messages.push({ role: 'assistant', tool_calls: message.tool_calls })
+      this.messages.push({ role: 'assistant', tool_calls: message.tool_calls, ...(text ? { content: text } : {}) })
     } else {
       this.messages.push({ role: 'assistant', content: text })
     }
