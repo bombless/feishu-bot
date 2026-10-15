@@ -421,7 +421,7 @@ const { attachTaskSummary } = require('./task-summary')
         const timeStart = process.hrtime.bigint()
         console.log('[card.action.trigger] received:', JSON.stringify({ action: data?.action, context: data?.context, event: data?.event }, null, 2))
         try {
-        const { action: { value }, context: { open_chat_id } } = data
+        const { action: { value }, context: { open_chat_id, open_message_id } = {} } = data
         if (value.action === 'set_model') {
           chat.model = value.model
           const meta = value.meta
@@ -473,9 +473,16 @@ const { attachTaskSummary } = require('./task-summary')
           if (!task) {
             return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
           }
+          const messageId = open_message_id || data?.context?.open_message_id
+          if (messageId) {
+            if (task.threadRootMessageId !== messageId) {
+              agentStore.updateTask(task.id, { threadRootMessageId: messageId, threadPublishedMessageIndex: 0 })
+            }
+            queueTaskThreadSync(task.id).catch(err => console.error(`[task.thread:${task.id}] sync error:`, err?.stack || err))
+          }
           // Returning a card from the card-action callback updates the existing card in place.
           // The callback event does not include a card_id, so do not call CardKit card.update here.
-          return taskDetailCard(task)
+          return taskDetailCard(agentStore.getTask(task.id) || task)
         }
         if (value.action === 'continue_task') {
           const task = agentStore.getTask(value.id)
@@ -485,6 +492,10 @@ const { attachTaskSummary } = require('./task-summary')
           if (!prompt) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '请先输入追问内容，再点击“继续提问”。' }] } }, type: 'raw' } }
           if (task.status === 'running' || task.status === 'queued') return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务仍在运行中，请完成后再继续追问。' }] } }, type: 'raw' } }
           if (!Array.isArray(task.messages) || !task.messages.length) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务没有可续接的 Agent 对话历史。' }] } }, type: 'raw' } }
+          const messageId = open_message_id || data?.context?.open_message_id
+          if (messageId && (!task.threadRootMessageId || task.threadRootMessageId !== messageId)) {
+            agentStore.updateTask(task.id, { threadRootMessageId: messageId, threadPublishedMessageIndex: 0 })
+          }
           agentStore.updateTask(task.id, { continuePrompt: prompt })
           const onFollowupComplete = async (completedTask) => {
             try {
