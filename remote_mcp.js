@@ -1,6 +1,4 @@
-const http = require('node:http')
 const crypto = require('node:crypto')
-const { exec } = require('node:child_process')
 const keytar = require('keytar')
 
 const ENDPOINT = 'https://bombless.duckdns.org/mcp'
@@ -10,11 +8,6 @@ const REDIRECT_URI = 'http://127.0.0.1:43127/oauth/callback'
 
 function base64url (value) { return Buffer.from(value).toString('base64url') }
 function random (bytes = 32) { return crypto.randomBytes(bytes).toString('base64url') }
-function openBrowser (url) {
-  const command = process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open'
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url]
-  try { exec([command, ...args].map(x => JSON.stringify(x)).join(' ')) } catch {}
-}
 async function jsonResponse (response) {
   const text = await response.text()
   let value
@@ -34,6 +27,8 @@ function wellKnown (base, suffix) {
 class RemoteMcp {
   constructor () {
     this.connected = false
+    this.pendingAuthorization = null
+    this.authMeta = null
     this.tools = []
     this.toolMap = new Map()
     this.accessToken = null
@@ -42,6 +37,8 @@ class RemoteMcp {
     this.sessionId = null
     this.requestId = 0
     this.pendingAuth = null
+    this.authMeta = null
+    this.pendingAuthorization = null
   }
 
   async restoreStoredSession () {
@@ -56,19 +53,14 @@ class RemoteMcp {
   }
 
   async connect () {
-    if (this.pendingAuth) return this.pendingAuth
-    this.pendingAuth = this._connect().finally(() => { this.pendingAuth = null })
-    return this.pendingAuth
-  }
-
-  async _connect () {
+    if (this.connected) return { connected: true, tools: this.tools.length, reusedToken: true }
     const saved = await keytar.getPassword(SERVICE, ACCOUNT)
     if (saved) {
       try {
         const tokens = JSON.parse(saved)
         this.accessToken = tokens.access_token
         this.refreshToken = tokens.refresh_token || null
-        if (tokens.client_info) this.clientInfo = tokens.client_info
+        this.clientInfo = tokens.client_info || null
         await this._initialize()
         return { connected: true, tools: this.tools.length, reusedToken: true }
       } catch (error) {
@@ -76,16 +68,20 @@ class RemoteMcp {
         this.refreshToken = null
       }
     }
+    return this.startAuthorization()
+  }
 
-    const resourceMetaUrl = wellKnown(ENDPOINT, 'oauth-protected-resource')
-    const resourceMeta = await getJson(resourceMetaUrl).catch(() => ({}))
+  async startAuthorization () {
+    if (this.pendingAuthorization) return { pending: true, message: '授权已开始，请在飞书发送 mcp otp <六位数字>' }
+    const resourceMeta = await getJson(wellKnown(ENDPOINT, 'oauth-protected-resource'))
     const authServer = resourceMeta.authorization_servers?.[0] || new URL(ENDPOINT).origin
     const authMeta = await getJson(wellKnown(authServer, 'oauth-authorization-server'))
       .catch(() => getJson(new URL('/.well-known/openid-configuration', authServer).toString()))
-    if (!authMeta.authorization_endpoint || !authMeta.token_endpoint) throw new Error('OAuth 服务发现失败：缺少 authorization_endpoint/token_endpoint')
+    if (!authMeta.authorization_endpoint || !authMeta.token_endpoint || !authMeta.registration_endpoint) {
+      throw new Error('OAuth 服务发现失败：缺少 authorization/token/registration endpoint')
+    }
     let clientInfo = this.clientInfo
     if (!clientInfo) {
-      if (!authMeta.registration_endpoint) throw new Error('OAuth 服务未提供动态客户端注册端点')
       clientInfo = await jsonResponse(await fetch(authMeta.registration_endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -100,7 +96,6 @@ class RemoteMcp {
       if (!clientInfo.client_id) throw new Error('OAuth 动态注册未返回 client_id')
       this.clientInfo = clientInfo
     }
-
     const verifier = random(48)
     const challenge = base64url(crypto.createHash('sha256').update(verifier).digest())
     const state = random(24)
@@ -113,48 +108,60 @@ class RemoteMcp {
     authorize.searchParams.set('state', state)
     if (resourceMeta.resource) authorize.searchParams.set('resource', resourceMeta.resource)
     if (resourceMeta.scopes_supported?.length) authorize.searchParams.set('scope', resourceMeta.scopes_supported.join(' '))
+    this.authMeta = authMeta
+    this.pendingAuthorization = { clientInfo, verifier, challenge, state, redirectUri: REDIRECT_URI, createdAt: Date.now() }
+    return { pending: true, message: '请在 5 分钟内发送：mcp otp <六位数字>', authorizationUrl: authorize.toString() }
+  }
 
-    const code = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { server.close(); reject(new Error('OAuth 授权超时（10 分钟）')) }, 10 * 60 * 1000)
-      const server = http.createServer((req, res) => {
-        const url = new URL(req.url, REDIRECT_URI)
-        if (url.pathname !== '/oauth/callback') { res.writeHead(404); return res.end('Not found') }
-        if (url.searchParams.get('state') !== state) { res.writeHead(400); return res.end('Invalid OAuth state') }
-        if (url.searchParams.get('error')) {
-          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
-          res.end('OAuth failed: ' + url.searchParams.get('error'))
-          clearTimeout(timer); server.close()
-          return reject(new Error('OAuth 授权失败：' + (url.searchParams.get('error_description') || url.searchParams.get('error'))))
-        }
-        const code = url.searchParams.get('code')
-        if (!code) { res.writeHead(400); return res.end('Missing code') }
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end('<!doctype html><meta charset="utf-8"><title>Feishu Bot MCP</title><p>授权完成，可以关闭此页面并返回飞书。</p>')
-        clearTimeout(timer); server.close(); resolve(code)
-      })
-      server.on('error', error => { clearTimeout(timer); reject(error) })
-      server.listen(43127, '127.0.0.1', () => {
-        openBrowser(authorize.toString())
-        console.log('[MCP] OAuth URL: ' + authorize.toString())
-        if (typeof this.onAuthUrl === 'function') this.onAuthUrl(authorize.toString())
-      })
+  async submitTotp (code) {
+    if (!/^\\d{6}$/.test(String(code))) throw new Error('验证码必须是六位数字')
+    const pending = this.pendingAuthorization
+    if (!pending || !this.authMeta) throw new Error('没有待完成的授权，请先发送 mcp connect')
+    if (Date.now() - pending.createdAt > 5 * 60 * 1000) {
+      this.pendingAuthorization = null
+      throw new Error('授权已超时，请重新发送 mcp connect')
+    }
+    const approveUrl = new URL('/oauth/authorize/approve', new URL(this.authMeta.authorization_endpoint).origin)
+    approveUrl.searchParams.set('client_id', pending.clientInfo.client_id)
+    approveUrl.searchParams.set('redirect_uri', pending.redirectUri)
+    approveUrl.searchParams.set('state', pending.state)
+    approveUrl.searchParams.set('code_challenge', pending.challenge)
+    const response = await fetch(approveUrl, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
+      body: new URLSearchParams({ totp: String(code) })
     })
-
-    const tokenResponse = await fetch(authMeta.token_endpoint, {
+    if (response.status !== 302 && response.status !== 303) {
+      const body = (await response.text()).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim()
+      if (response.status === 401) throw new Error('验证码错误或已过期，请重新输入六位数字')
+      throw new Error('OAuth 验证失败 (' + response.status + '): ' + body.slice(0, 300))
+    }
+    const location = response.headers.get('location')
+    if (!location) throw new Error('OAuth 授权响应缺少 redirect Location')
+    const callback = new URL(location, pending.redirectUri)
+    if (callback.searchParams.get('state') !== pending.state) throw new Error('OAuth state 校验失败')
+    const oauthError = callback.searchParams.get('error')
+    if (oauthError) throw new Error('OAuth 授权失败：' + oauthError)
+    const codeFromCallback = callback.searchParams.get('code')
+    if (!codeFromCallback) throw new Error('OAuth 回调未返回 authorization code')
+    const tokenResponse = await fetch(this.authMeta.token_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: new URLSearchParams({
-        grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI,
-        client_id: clientInfo.client_id, code_verifier: verifier
+        grant_type: 'authorization_code', code: codeFromCallback,
+        redirect_uri: pending.redirectUri, client_id: pending.clientInfo.client_id,
+        code_verifier: pending.verifier
       })
     })
     const tokens = await jsonResponse(tokenResponse)
     if (!tokens.access_token) throw new Error('OAuth token 响应缺少 access_token')
     this.accessToken = tokens.access_token
     this.refreshToken = tokens.refresh_token || null
-    await keytar.setPassword(SERVICE, ACCOUNT, JSON.stringify({ ...tokens, client_info: clientInfo }))
+    await keytar.setPassword(SERVICE, ACCOUNT, JSON.stringify({ ...tokens, client_info: pending.clientInfo }))
+    this.pendingAuthorization = null
     await this._initialize()
-    return { connected: true, tools: this.tools.length, reusedToken: false }
+    return { connected: true, tools: this.tools.length }
   }
 
   async _request (method, params = {}) {
