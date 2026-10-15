@@ -9,11 +9,15 @@ const { runChatTask } = require('./agent_runner')
 const { createAgentServer, listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./config')
 const { attachTaskSummary } = require('./task-summary')
-const remoteMcp = require('./remote_mcp')
 
 ;(async () => {
   const config = await getConfig()
   const chat = new Chat({ url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl })
+  // Reconnect silently with a previously stored OAuth token; a fresh login is always initiated explicitly by `mcp connect`.
+  const remoteMcp = require('./remote_mcp')
+  remoteMcp.restoreStoredSession().then(restored => {
+    if (restored) console.log('[MCP] Restored remote MCP session with ' + remoteMcp.tools.length + ' tools')
+  }).catch(error => console.error('[MCP] Could not restore saved session; use `mcp connect` to reauthorize:', error?.message || error))
   const filteredModelsPath = path.join(__dirname, 'data', 'filtered-models.json')
   let filteredModels = new Set()
   try {
