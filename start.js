@@ -13,6 +13,11 @@ const { attachTaskSummary } = require('./task-summary')
 ;(async () => {
   const config = await getConfig()
   const chat = new Chat({ url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl })
+  // Reconnect silently with a previously stored OAuth token; a fresh login is always initiated explicitly by `mcp connect`.
+  const remoteMcp = require('./remote_mcp')
+  remoteMcp.restoreStoredSession().then(restored => {
+    if (restored) console.log('[MCP] Restored remote MCP session with ' + remoteMcp.tools.length + ' tools')
+  }).catch(error => console.error('[MCP] Could not restore saved session; use `mcp connect` to reauthorize:', error?.message || error))
   const filteredModelsPath = path.join(__dirname, 'data', 'filtered-models.json')
   let filteredModels = new Set()
   try {
@@ -79,7 +84,16 @@ const { attachTaskSummary } = require('./task-summary')
       if (!msg || msg.role === 'system') continue
 
       if (msg.role === 'user') {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')
+        let content = ''
+        if (typeof msg.content === 'string') {
+          content = msg.content
+        } else if (Array.isArray(msg.content)) {
+          const textPart = msg.content.find(p => p.type === 'text')?.text || ''
+          const imgCount = msg.content.filter(p => p.type === 'image_url').length
+          content = imgCount > 0 ? `${textPart} [包含 ${imgCount} 张图片，已送入视觉模型分析]` : (textPart || JSON.stringify(msg.content || ''))
+        } else {
+          content = JSON.stringify(msg.content || '')
+        }
         items.push({
           type: 'user',
           title: '💬 用户输入',
@@ -310,6 +324,25 @@ const { attachTaskSummary } = require('./task-summary')
     return truncated + suffix
   }
 
+  function runTaskCard (task) {
+    const threadNote = task.threadRootMessageId
+      ? '\n\n*(Agent 执行详情已同步至话题回复)*'
+      : '\n\n*(可用 list 查看任务状态，或点击下方按钮查看详情)*'
+    const content = truncateMarkdown(formatTask(task, false) + threadNote + '\n\n任务执行完毕后将直接发送结果。')
+    const elements = [
+      { tag: 'markdown', content },
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '查看详情' },
+        type: 'primary',
+        width: 'default',
+        size: 'medium',
+        behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
+      }
+    ]
+    return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
+  }
+
   function taskDetailCard (task) {
     const threadNote = task.threadRootMessageId
       ? '\n\n*(Agent 执行详情已同步至话题回复)*'
@@ -421,7 +454,7 @@ const { attachTaskSummary } = require('./task-summary')
         const timeStart = process.hrtime.bigint()
         console.log('[card.action.trigger] received:', JSON.stringify({ action: data?.action, context: data?.context, event: data?.event }, null, 2))
         try {
-        const { action: { value }, context: { open_chat_id } } = data
+        const { action: { value }, context: { open_chat_id, open_message_id } = {} } = data
         if (value.action === 'set_model') {
           chat.model = value.model
           const meta = value.meta
@@ -473,9 +506,16 @@ const { attachTaskSummary } = require('./task-summary')
           if (!task) {
             return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: `**找不到任务**\n${value.id}` }] } }, type: 'raw' } }
           }
+          const messageId = open_message_id || data?.context?.open_message_id
+          if (messageId) {
+            if (task.threadRootMessageId !== messageId) {
+              agentStore.updateTask(task.id, { threadRootMessageId: messageId, threadPublishedMessageIndex: 0 })
+            }
+            queueTaskThreadSync(task.id).catch(err => console.error(`[task.thread:${task.id}] sync error:`, err?.stack || err))
+          }
           // Returning a card from the card-action callback updates the existing card in place.
           // The callback event does not include a card_id, so do not call CardKit card.update here.
-          return taskDetailCard(task)
+          return taskDetailCard(agentStore.getTask(task.id) || task)
         }
         if (value.action === 'continue_task') {
           const task = agentStore.getTask(value.id)
@@ -485,6 +525,10 @@ const { attachTaskSummary } = require('./task-summary')
           if (!prompt) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '请先输入追问内容，再点击“继续提问”。' }] } }, type: 'raw' } }
           if (task.status === 'running' || task.status === 'queued') return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务仍在运行中，请完成后再继续追问。' }] } }, type: 'raw' } }
           if (!Array.isArray(task.messages) || !task.messages.length) return { card: { data: { schema: '2.0', body: { elements: [{ tag: 'markdown', content: '该任务没有可续接的 Agent 对话历史。' }] } }, type: 'raw' } }
+          const messageId = open_message_id || data?.context?.open_message_id
+          if (messageId && (!task.threadRootMessageId || task.threadRootMessageId !== messageId)) {
+            agentStore.updateTask(task.id, { threadRootMessageId: messageId, threadPublishedMessageIndex: 0 })
+          }
           agentStore.updateTask(task.id, { continuePrompt: prompt })
           const onFollowupComplete = async (completedTask) => {
             try {
@@ -558,14 +602,45 @@ const { attachTaskSummary } = require('./task-summary')
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
-        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'help']
+        const KNOWN_COMMANDS = ['mcp', 'd', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'help']
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
           if (!isKnownCommand) {
             const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已自动开启'
-            responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            responseContent = formatTask(task, false) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            const runRes = await createCardWithLogging('run-task', {
+              data: { type: 'card_json', data: JSON.stringify(runTaskCard(task).card.data) }
+            })
+            card_id = (runRes?.code === 0 && runRes?.data?.card_id) ? runRes.data.card_id : null
+            if (card_id) responseContent = null
+          } else if (command === 'mcp') {
+            const action = (parts[1] || 'status').toLowerCase()
+            if (action === 'connect') {
+              const result = await remoteMcp.connect()
+              responseTitle = result.connected ? '远程 MCP 已连接' : '远程 MCP 等待 2FA 验证'
+              responseContent = result.connected
+                ? '已连接，发现 ' + result.tools + ' 个工具。'
+                : '请在 5 分钟内直接发送命令：\nmcp otp 123456\n将 123456 替换为 Authenticator 当前显示的六位数字。'
+            } else if (action === 'otp') {
+              const code = parts.slice(2).join('')
+              const result = await remoteMcp.submitTotp(code)
+              responseTitle = '远程 MCP 已连接'
+              responseContent = 'OAuth 验证成功，已发现 ' + result.tools + ' 个工具。Agent Loop 现在可以调用这些远程工具。'
+            } else if (action === 'disconnect') {
+              await remoteMcp.disconnect()
+              responseTitle = '远程 MCP 已断开'
+              responseContent = '已清除本机保存的 OAuth token，并停止向 Agent 提供远程工具。'
+            } else if (action === 'status') {
+              const status = remoteMcp.status()
+              responseTitle = '远程 MCP 状态'
+              responseContent = status.connected
+                ? '已连接，发现 ' + status.tools.length + ' 个工具：\n' + status.tools.join('\n')
+                : '当前未连接。发送 mcp connect 开始 OAuth 授权。'
+            } else {
+              throw new Error('用法：mcp connect | mcp otp <六位数字> | mcp disconnect | mcp status')
+            }
           } else if (command === 'd' || command === 'ls' || command === 'dir') {
             const target = cmd.slice(command.length).trim() || 'D:\\'
             const result = listDirectory(target)
@@ -593,7 +668,12 @@ const { attachTaskSummary } = require('./task-summary')
             if (!prompt) throw new Error('用法: run <任务描述>')
             const task = await startRunTask(prompt, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已开启'
-            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
+            responseContent = formatTask(task, false) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
+            const runRes = await createCardWithLogging('run-task', {
+              data: { type: 'card_json', data: JSON.stringify(runTaskCard(task).card.data) }
+            })
+            card_id = (runRes?.code === 0 && runRes?.data?.card_id) ? runRes.data.card_id : null
+            if (card_id) responseContent = null
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
             card_id = await createCardWithLogging('task-list', {
@@ -637,7 +717,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nmcp connect/otp <六位数字>/disconnect/status 连接、输入 2FA 验证码、断开和查看远程 MCP；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }

@@ -3,3 +3,9 @@
 /node_modules
 /data/agent-history.json
 /data/agent-history.json.tmp
+/data/mcp-oauth.json
+/data/screenshots/
+/screenshots/
+/run.log
+/nohup.out
+

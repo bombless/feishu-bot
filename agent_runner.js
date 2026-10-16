@@ -1,4 +1,7 @@
+const fs = require('node:fs')
+const path = require('node:path')
 const Chat = require('./chat')
+const remoteMcp = require('./remote_mcp')
 
 const TOOLS = [
   { type: 'function', function: { name: 'execute_powershell', description: '在 Windows agent 工作区内执行 PowerShell 脚本；需要环境启用命令执行权限', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 PowerShell 脚本内容' }, cwd: { type: 'string', description: '可选的工作目录，必须位于 agent 工作区内' } }, required: ['command'], additionalProperties: false } } },
@@ -16,6 +19,52 @@ const TOOLS = [
 function stringifyResult (value) {
   if (typeof value === 'string') return value
   try { return JSON.stringify(value) } catch { return String(value) }
+}
+
+function extractImagesAndCleanResult (result, taskId, callName) {
+  let parsed = result
+  let wasString = false
+  if (typeof result === 'string' && result.includes('"type":"image"') && result.includes('"data"')) {
+    try {
+      parsed = JSON.parse(result)
+      wasString = true
+    } catch {}
+  }
+  const images = []
+  if (parsed && Array.isArray(parsed.content)) {
+    const cleanContent = []
+    let imgIndex = 0
+    for (const part of parsed.content) {
+      if (part && part.type === 'image' && part.data) {
+        imgIndex++
+        const mimeType = part.mimeType || 'image/jpeg'
+        const ext = mimeType === 'image/png' ? 'png' : 'jpg'
+        const kb = Math.round((part.data.length * 0.75) / 1024)
+        let savedPath = ''
+        if (taskId) {
+          try {
+            const dir = path.join(__dirname, 'data', 'screenshots', taskId)
+            fs.mkdirSync(dir, { recursive: true })
+            const filename = `shot_${callName || 'tool'}_${Date.now()}_${imgIndex}.${ext}`
+            savedPath = path.join(dir, filename)
+            fs.writeFileSync(savedPath, Buffer.from(part.data, 'base64'))
+          } catch (e) {
+            console.error('保存截图文件失败:', e?.message || e)
+          }
+        }
+        images.push({ mimeType, data: part.data, savedPath })
+        cleanContent.push({
+          type: 'text',
+          text: `[已获取图像数据: ${mimeType} (${kb} KB)${savedPath ? `，已保存至 ${savedPath}` : ''}，已送入视觉模型分析]`
+        })
+      } else {
+        cleanContent.push(part)
+      }
+    }
+    const cleanResult = Object.assign({}, parsed, { content: cleanContent })
+    return { cleanResult: wasString ? JSON.stringify(cleanResult) : cleanResult, images }
+  }
+  return { cleanResult: result, images }
 }
 
 async function consumeTurn (iterator) {
@@ -40,7 +89,7 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
     apiKey: config.apiKey,
     model: config.model,
     modelsUrl: config.modelsUrl,
-    tools: TOOLS,
+    tools: [...TOOLS, ...(remoteMcp.connected ? remoteMcp.tools : [])],
     system: [
       '你是一个可以调用本地 agent 工具的任务执行助手。',
       '需要事实、文件或环境信息时优先使用工具，不要虚构工具执行结果。',
@@ -80,15 +129,23 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
         return
       }
       const results = []
+      const roundImages = []
       for (const call of turn.calls) {
         const item = { round: round + 1, id: call.id, name: call.name, arguments: call.arguments, startedAt: new Date().toISOString() }
         try {
-          if (!TOOLS.some(t => t.function.name === call.name)) throw new Error('模型请求了未注册的工具: ' + call.name)
-          const { runAgentTool, AgentRequestSchema } = await import('@bombless/agent-lib')
-          const request = AgentRequestSchema.parse({ type: 'request', id: call.id, tool: call.name, args: call.arguments || {} })
-          const result = await runAgentTool(request.tool, request.args, { logCommand: (command, cwd) => console.log('[agent-lib]', command, cwd || '') })
+          let result
+          if (remoteMcp.connected && remoteMcp.tools.some(t => t.function.name === call.name)) {
+            result = await remoteMcp.callTool(call.name, call.arguments || {})
+          } else {
+            if (!TOOLS.some(t => t.function.name === call.name)) throw new Error('模型请求了未注册的工具: ' + call.name)
+            const { runAgentTool, AgentRequestSchema } = await import('@bombless/agent-lib')
+            const request = AgentRequestSchema.parse({ type: 'request', id: call.id, tool: call.name, args: call.arguments || {} })
+            result = await runAgentTool(request.tool, request.args, { logCommand: (command, cwd) => console.log('[agent-lib]', command, cwd || '') })
+          }
+          const { cleanResult, images } = extractImagesAndCleanResult(result, task.id, call.name)
+          if (images.length) roundImages.push(...images)
           item.status = 'succeeded'
-          item.result = stringifyResult(result)
+          item.result = stringifyResult(cleanResult)
         } catch (error) {
           item.status = 'failed'
           item.error = error && error.message ? error.message : String(error)
@@ -98,7 +155,7 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
         results.push({ id: call.id, content: item.status === 'succeeded' ? item.result : '工具执行失败: ' + item.error })
         store.updateTask(task.id, { trace, messages: chat.messages })
       }
-      turn = await chat.reportCallsOnce(results)
+      turn = await chat.reportCallsOnce(results, roundImages)
       store.updateTask(task.id, { trace, messages: chat.messages, output: turn.text })
       await publishNewMessages()
     }
