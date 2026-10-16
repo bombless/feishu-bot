@@ -324,6 +324,25 @@ const { attachTaskSummary } = require('./task-summary')
     return truncated + suffix
   }
 
+  function runTaskCard (task) {
+    const threadNote = task.threadRootMessageId
+      ? '\n\n*(Agent 执行详情已同步至话题回复)*'
+      : '\n\n*(可用 list 查看任务状态，或点击下方按钮查看详情)*'
+    const content = truncateMarkdown(formatTask(task, false) + threadNote + '\n\n任务执行完毕后将直接发送结果。')
+    const elements = [
+      { tag: 'markdown', content },
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '查看详情' },
+        type: 'primary',
+        width: 'default',
+        size: 'medium',
+        behaviors: [{ type: 'callback', value: { action: 'task_id', id: task.id } }]
+      }
+    ]
+    return { card: { data: { schema: '2.0', body: { elements } }, type: 'raw' } }
+  }
+
   function taskDetailCard (task) {
     const threadNote = task.threadRootMessageId
       ? '\n\n*(Agent 执行详情已同步至话题回复)*'
@@ -590,7 +609,12 @@ const { attachTaskSummary } = require('./task-summary')
           if (!isKnownCommand) {
             const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已自动开启'
-            responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            responseContent = formatTask(task, false) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            const runRes = await createCardWithLogging('run-task', {
+              data: { type: 'card_json', data: JSON.stringify(runTaskCard(task).card.data) }
+            })
+            card_id = (runRes?.code === 0 && runRes?.data?.card_id) ? runRes.data.card_id : null
+            if (card_id) responseContent = null
           } else if (command === 'mcp') {
             const action = (parts[1] || 'status').toLowerCase()
             if (action === 'connect') {
@@ -644,7 +668,12 @@ const { attachTaskSummary } = require('./task-summary')
             if (!prompt) throw new Error('用法: run <任务描述>')
             const task = await startRunTask(prompt, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已开启'
-            responseContent = formatTask(task) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
+            responseContent = formatTask(task, false) + '\n\n可用 list 查看任务状态，id ' + task.id + ' 查看消息和工具调用历史。执行完毕后将直接发送结果。'
+            const runRes = await createCardWithLogging('run-task', {
+              data: { type: 'card_json', data: JSON.stringify(runTaskCard(task).card.data) }
+            })
+            card_id = (runRes?.code === 0 && runRes?.data?.card_id) ? runRes.data.card_id : null
+            if (card_id) responseContent = null
           } else if (command === 'list' || command === 'history' || command === 'tasks') {
             responseTitle = 'Agent 任务历史'
             card_id = await createCardWithLogging('task-list', {
