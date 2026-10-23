@@ -1,6 +1,7 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
@@ -52,6 +53,56 @@ const { attachTaskSummary } = require('./task-summary')
       throw error
     }
   }
+  async function readFeishuResourceBuffer (resource) {
+    let stream = resource
+    if (stream && typeof stream.getReadableStream === 'function') stream = stream.getReadableStream()
+    else if (stream?.data && stream.data !== stream) stream = stream.data
+
+    if (Buffer.isBuffer(stream)) return stream
+    if (stream instanceof Uint8Array) return Buffer.from(stream)
+    if (stream && typeof stream.arrayBuffer === 'function') return Buffer.from(await stream.arrayBuffer())
+    if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+      const chunks = []
+      for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      return Buffer.concat(chunks)
+    }
+    throw new Error('飞书音频下载接口没有返回可读取的音频数据')
+  }
+
+  function prepareAudioForModel (audioBuffer) {
+    if (!audioBuffer?.length) throw new Error('下载到的音频内容为空')
+    if (audioBuffer.length > 15 * 1024 * 1024) throw new Error('音频超过 15 MB，暂不支持直接发送给模型')
+
+    // Chat Completions 的 input_audio 通常要求 WAV 或 MP3；飞书语音常见为 Ogg/Opus。
+    if (audioBuffer.subarray(0, 4).toString('ascii') === 'RIFF' && audioBuffer.subarray(8, 12).toString('ascii') === 'WAVE') {
+      return { buffer: audioBuffer, format: 'wav' }
+    }
+    if (audioBuffer.subarray(0, 3).toString('ascii') === 'ID3' || (audioBuffer[0] === 0xff && (audioBuffer[1] & 0xe0) === 0xe0)) {
+      return { buffer: audioBuffer, format: 'mp3' }
+    }
+
+    const converted = spawnSync('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn',
+      '-f', 'mp3', '-codec:a', 'libmp3lame', '-b:a', '96k', 'pipe:1'
+    ], { input: audioBuffer, maxBuffer: 25 * 1024 * 1024, windowsHide: true })
+    if (converted.error) {
+      if (converted.error.code === 'ENOENT') throw new Error('飞书语音需要转换为 MP3，请先安装 ffmpeg 并确保 ffmpeg 在 PATH 中')
+      throw new Error('音频格式转换失败：' + converted.error.message)
+    }
+    if (converted.status !== 0 || !converted.stdout?.length) {
+      const detail = String(converted.stderr || '').trim()
+      throw new Error('无法将飞书语音转换为 MP3' + (detail ? '：' + detail.slice(0, 300) : ''))
+    }
+    return { buffer: converted.stdout, format: 'mp3' }
+  }
+
+  async function sendAudioReply (messageId, chatId, text) {
+    return client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: String(text || '').slice(0, 8000) }) }
+    })
+  }
+
   const agentStore = new AgentStore()
   const chatState = new Map()
   const eventLog = new Map()
@@ -544,10 +595,34 @@ const { attachTaskSummary } = require('./task-summary')
         }
       },
       'im.message.receive_v1': async data => {
-        const { event_id, message: { chat_id, content, create_time, message_id }, sender } = data
+        const { event_id, message: { chat_id, content, create_time, message_id, message_type }, sender } = data
         if (create_time * 1000 + 10000 < +new Date()) return
         if (eventLog.has(event_id)) return
         eventLog.set(event_id, event_id)
+        if (message_type === 'audio') {
+          try {
+            const audioMessage = JSON.parse(content || '{}')
+            if (!audioMessage.file_key) throw new Error('音频消息中没有 file_key，无法下载音频')
+            await sendAudioReply(message_id, chat_id, '🎧 收到音频，正在理解，请稍候……')
+            const resource = await client.im.v1.messageResource.get({
+              path: { message_id, file_key: audioMessage.file_key },
+              params: { type: 'file' }
+            })
+            const audioBuffer = await readFeishuResourceBuffer(resource)
+            const prepared = prepareAudioForModel(audioBuffer)
+            const answer = await chat.clone().askAudio(prepared.buffer.toString('base64'), prepared.format)
+            await sendAudioReply(message_id, chat_id, answer?.trim() || '模型没有返回文本回复。')
+          } catch (error) {
+            console.error('[audio.message] processing failed:', error?.stack || error)
+            try {
+              await sendAudioReply(message_id, chat_id, '音频处理失败：' + String(error?.message || error).slice(0, 500))
+            } catch (replyError) {
+              console.error('[audio.message] failed to send error reply:', replyError?.stack || replyError)
+            }
+          }
+          return
+        }
+
         const cmd = JSON.parse(content).text.trim()
         if (cmd === '.quit') chatState.delete(chat_id)
 
