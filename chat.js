@@ -101,6 +101,19 @@ class Chat {
     return { text, calls }
   }
 
+  // 直接把音频交给支持 OpenAI 兼容 input_audio 格式的模型理解。
+  async askAudio (audioBase64, format = 'mp3', prompt = '请理解这段音频，并根据音频内容直接回答用户。', signal) {
+    this.messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'input_audio', input_audio: { data: audioBase64, format } }
+      ]
+    })
+    const result = await this.requestOnce(signal)
+    return result.text
+  }
+
   async askOnce (prompt, signal) {
     this.messages.push({ role: 'user', content: prompt })
     return this.requestOnce(signal)
