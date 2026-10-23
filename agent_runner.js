@@ -28,7 +28,7 @@ async function consumeTurn (iterator) {
   return { text, calls }
 }
 
-async function runChatTask (store, task, config, onComplete, onLoopMessage) {
+async function runChatTask (store, task, config, onComplete, onLoopMessage, audioInput = null) {
   const continuing = Boolean(task.continuePrompt && Array.isArray(task.messages) && task.messages.length)
   store.updateTask(task.id, {
     status: 'running', startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: '',
@@ -65,7 +65,9 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
         }
       }
     }
-    let turn = await chat.askOnce(continuing ? task.continuePrompt : task.prompt)
+    let turn = audioInput && !continuing
+      ? await chat.askAudioOnce(audioInput.base64, audioInput.format, task.prompt)
+      : await chat.askOnce(continuing ? task.continuePrompt : task.prompt)
     store.updateTask(task.id, { messages: chat.messages })
     await publishNewMessages()
     if (continuing) {
