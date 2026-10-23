@@ -237,7 +237,7 @@ const { attachTaskSummary } = require('./task-summary')
     return next
   }
 
-  async function startRunTask (prompt, chatId, senderId, appConfig, chatModel) {
+  async function startRunTask (prompt, chatId, senderId, appConfig, chatModel, audioInput = null) {
     const cwd = appConfig.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
     const task = agentStore.createTask({ chatId, senderId, cwd, prompt })
     attachTaskSummary(agentStore, task, Object.assign({}, appConfig, { model: chatModel }))
@@ -277,7 +277,7 @@ const { attachTaskSummary } = require('./task-summary')
       }
     }
 
-    runChatTask(agentStore, task, Object.assign({}, appConfig, { model: chatModel }), onComplete, async (taskId) => queueTaskThreadSync(taskId))
+    runChatTask(agentStore, task, Object.assign({}, appConfig, { model: chatModel }), onComplete, async (taskId) => queueTaskThreadSync(taskId), audioInput)
     return task
   }
 
@@ -610,8 +610,15 @@ const { attachTaskSummary } = require('./task-summary')
             })
             const audioBuffer = await readFeishuResourceBuffer(resource)
             const prepared = prepareAudioForModel(audioBuffer)
-            const answer = await chat.clone().askAudio(prepared.buffer.toString('base64'), prepared.format)
-            await sendAudioReply(message_id, chat_id, answer?.trim() || '模型没有返回文本回复。')
+            const task = await startRunTask(
+              '请理解用户发送的音频内容，并根据音频中的请求使用可用工具完成任务；如果音频只是提问，则直接回答。',
+              chat_id,
+              sender?.sender_id?.open_id,
+              config,
+              chat.model,
+              { base64: prepared.buffer.toString('base64'), format: prepared.format }
+            )
+            await sendAudioReply(message_id, chat_id, '🎧 音频已提交给 run Agent，正在理解并执行。任务 ID：' + task.id)
           } catch (error) {
             console.error('[audio.message] processing failed:', error?.stack || error)
             try {
