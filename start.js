@@ -5,7 +5,7 @@ const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
 const AgentStore = require('./agent_store')
-const { runChatTask } = require('./agent_runner')
+const { runChatTask, enqueueRunMessage } = require('./agent_runner')
 const { listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./env-util')
 const { attachTaskSummary } = require('./task-summary')
@@ -563,9 +563,19 @@ const { attachTaskSummary } = require('./task-summary')
 
         try {
           if (!isKnownCommand) {
-            const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
-            responseTitle = '模型 Agent 任务已自动开启'
-            responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            const senderId = sender?.sender_id?.open_id
+            const activeTask = agentStore.listTasks(100).find(task =>
+              task.chatId === chat_id && task.senderId === senderId && (task.status === 'running' || task.status === 'queued') &&
+              enqueueRunMessage(task.id, cmd)
+            )
+            if (activeTask) {
+              responseTitle = '已追加到当前 Agent 任务'
+              responseContent = `已将新消息追加到正在执行的任务中。\n\n**任务 ID：** ${activeTask.id}\n**追加内容：** ${cmd}\n\n模型请求会在安全边界处重新处理；正在执行的工具不会被强制中断。`
+            } else {
+              const task = await startRunTask(cmd, chat_id, senderId, config, chat.model)
+              responseTitle = '模型 Agent 任务已自动开启'
+              responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
+            }
           } else if (command === 'd' || command === 'ls' || command === 'dir') {
             const target = cmd.slice(command.length).trim() || 'D:\\'
             const result = listDirectory(target)
