@@ -28,19 +28,27 @@ async function consumeTurn (iterator) {
   return { text, calls }
 }
 
+const activeRuns = new Map()
+
+function enqueueRunMessage (taskId, prompt) {
+  const run = activeRuns.get(taskId)
+  if (!run) return false
+  run.pending.push(String(prompt))
+  if (run.phase === 'model' && run.controller) run.controller.abort()
+  return true
+}
+
 async function runChatTask (store, task, config, onComplete, onLoopMessage) {
   const continuing = Boolean(task.continuePrompt && Array.isArray(task.messages) && task.messages.length)
+  const run = { phase: 'starting', controller: null, pending: [] }
+  activeRuns.set(task.id, run)
   store.updateTask(task.id, {
     status: 'running', startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: '',
     ...(continuing ? {} : { trace: [], messages: [] })
   })
-  process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || config.agentWorkspace || (process.platform === 'win32' ? 'D:\\\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
+  process.env.AGENT_WORKSPACE = process.env.AGENT_WORKSPACE || config.agentWorkspace || (process.platform === 'win32' ? 'D:\\mcp-agent-workspace' : '/tmp/mcp-agent-workspace')
   const chat = new Chat({
-    url: config.url,
-    apiKey: config.apiKey,
-    model: config.model,
-    modelsUrl: config.modelsUrl,
-    tools: TOOLS,
+    url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl, tools: TOOLS,
     system: [
       '你是一个可以调用本地 agent 工具的任务执行助手。',
       '需要事实、文件或环境信息时优先使用工具，不要虚构工具执行结果。',
@@ -53,19 +61,46 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
   if (continuing) chat.messages = task.messages
   const trace = continuing ? [...(task.trace || [])] : []
   const maxRounds = 12
-  try {
-    let publishedMessageIndex = chat.messages.length
-    const publishNewMessages = async () => {
-      const end = chat.messages.length
-      for (; publishedMessageIndex < end; publishedMessageIndex++) {
-        const message = chat.messages[publishedMessageIndex]
-        if (message.role === 'system') continue
-        if (typeof onLoopMessage === 'function') {
-          try { await onLoopMessage(task.id, message, publishedMessageIndex, chat.messages) } catch (e) { console.error('onLoopMessage error:', e) }
-        }
+  let publishedMessageIndex = chat.messages.length
+  const publishNewMessages = async () => {
+    const end = chat.messages.length
+    for (; publishedMessageIndex < end; publishedMessageIndex++) {
+      const message = chat.messages[publishedMessageIndex]
+      if (message.role === 'system') continue
+      if (typeof onLoopMessage === 'function') {
+        try { await onLoopMessage(task.id, message, publishedMessageIndex, chat.messages) } catch (e) { console.error('onLoopMessage error:', e) }
       }
     }
-    let turn = await chat.askOnce(continuing ? task.continuePrompt : task.prompt)
+  }
+  const persist = () => store.updateTask(task.id, { trace, messages: chat.messages })
+  const drainPending = () => {
+    const pending = run.pending.splice(0)
+    for (const content of pending) chat.messages.push({ role: 'user', content })
+    return pending.length
+  }
+  // Abort only the model HTTP request. Tool executions are not cancelled; new prompts
+  // are appended after their tool results so the provider's tool-call protocol stays valid.
+  const requestModel = async (request) => {
+    let operation = request
+    while (true) {
+      const controller = new AbortController()
+      run.controller = controller
+      run.phase = 'model'
+      try {
+        const result = await operation(controller.signal)
+        run.controller = null
+        return result
+      } catch (error) {
+        run.controller = null
+        if (error?.name !== 'AbortError' || !run.pending.length) throw error
+        drainPending()
+        persist()
+        operation = signal => chat.requestOnce(signal)
+      }
+    }
+  }
+  try {
+    let turn = await requestModel(signal => chat.askOnce(continuing ? task.continuePrompt : task.prompt, signal))
     store.updateTask(task.id, { messages: chat.messages })
     await publishNewMessages()
     if (continuing) {
@@ -73,12 +108,21 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
     }
     for (let round = 0; round < maxRounds; round++) {
       if (!turn.calls.length) {
+        if (drainPending()) {
+          persist()
+          turn = await requestModel(signal => chat.requestOnce(signal))
+          await publishNewMessages()
+          round--
+          continue
+        }
+        run.phase = 'finishing'
         const updated = store.updateTask(task.id, { status: 'succeeded', finishedAt: new Date().toISOString(), exitCode: 0, output: turn.text, error: '', trace, messages: chat.messages })
         if (typeof onComplete === 'function') {
           try { await onComplete(updated) } catch (e) { console.error('onComplete error:', e) }
         }
         return
       }
+      run.phase = 'tools'
       const results = []
       for (const call of turn.calls) {
         const item = { round: round + 1, id: call.id, name: call.name, arguments: call.arguments, startedAt: new Date().toISOString() }
@@ -98,7 +142,12 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
         results.push({ id: call.id, content: item.status === 'succeeded' ? item.result : '工具执行失败: ' + item.error })
         store.updateTask(task.id, { trace, messages: chat.messages })
       }
-      turn = await chat.reportCallsOnce(results)
+      // First close every tool call/result pair, then inject any messages received while
+      // tools were running, and only then ask the model to continue.
+      for (const result of results) chat.messages.push({ role: 'tool', tool_call_id: result.id, content: result.content })
+      drainPending()
+      persist()
+      turn = await requestModel(signal => chat.requestOnce(signal))
       store.updateTask(task.id, { trace, messages: chat.messages, output: turn.text })
       await publishNewMessages()
     }
@@ -108,7 +157,8 @@ async function runChatTask (store, task, config, onComplete, onLoopMessage) {
     if (typeof onComplete === 'function') {
       try { await onComplete(updated) } catch (e) { console.error('onComplete error:', e) }
     }
+  } finally {
+    if (activeRuns.get(task.id) === run) activeRuns.delete(task.id)
   }
 }
-
-module.exports = { runChatTask, TOOLS }
+module.exports = { runChatTask, enqueueRunMessage, TOOLS }
