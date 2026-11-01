@@ -3,7 +3,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 
-function run (command, args, timeoutMs = 15000) {
+function run (command, args, timeoutMs = 15000, allowNonZero = false) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true })
     let stdout = ''
@@ -20,7 +20,7 @@ function run (command, args, timeoutMs = 15000) {
     })
     child.on('close', code => {
       clearTimeout(timer)
-      if (code === 0) resolve({ stdout, stderr })
+      if (code === 0 || allowNonZero) resolve({ stdout, stderr })
       else reject(new Error(`摄像头采集失败（退出码 ${code}）：${stderr.trim().slice(-1200) || stdout.trim().slice(-1200) || '未知错误'}`))
     })
   })
@@ -32,7 +32,7 @@ async function capturePhoto (device) {
 
   if (process.platform === 'win32') {
     if (!device) {
-      const { stderr } = await run('ffmpeg', ['-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'])
+      const { stderr } = await run('ffmpeg', ['-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'], 15000, true)
       const match = stderr.match(/"([^"]+)"\s+\(video\)/i)
       if (!match) throw new Error('没有检测到摄像头。请检查摄像头连接和 Windows 摄像头权限。')
       device = match[1]
