@@ -1,5 +1,6 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
+const { capturePhoto } = require('./photo')
 const path = require('node:path')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
@@ -555,10 +556,11 @@ const { attachTaskSummary } = require('./task-summary')
         let responseContent
         let card_id
         let taskForThread = null
+        let photoImageKey = null
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
-        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'help']
+        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'help']
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
@@ -577,6 +579,26 @@ const { attachTaskSummary } = require('./task-summary')
                 data: JSON.stringify(directoryCard(result).card.data)
               }
             }).then(res => res.data.card_id)
+          } else if (command === 'photo') {
+            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
+            const senderOpenId = sender?.sender_id?.open_id
+            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
+              throw new Error('photo 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
+            }
+            const imagePath = await capturePhoto(parts.slice(1).join(' ').trim() || undefined)
+            try {
+              const upload = await client.im.v1.image.create({
+                data: { image_type: 'message', image: fs.createReadStream(imagePath) }
+              })
+              photoImageKey = upload?.data?.image_key
+              if (!photoImageKey) throw new Error('飞书图片上传失败：没有返回 image_key。')
+            } finally {
+              try { fs.rmSync(imagePath, { force: true }) } catch (cleanupError) {
+                console.warn('清理临时照片失败:', cleanupError?.message || cleanupError)
+              }
+            }
+            responseTitle = '摄像头照片'
+            responseContent = '已拍摄当前画面。'
           } else if (command === 'task') {
             const raw = cmd.slice(command.length).trim()
             const separator = raw.indexOf('::')
@@ -644,6 +666,17 @@ const { attachTaskSummary } = require('./task-summary')
         } catch (e) {
           responseTitle = 'Agent 操作失败'
           responseContent = e.message
+        }
+
+        if (photoImageKey) {
+          ret = await client.im.v1.message.reply({
+            path: { message_id },
+            data: { msg_type: 'image', content: JSON.stringify({ image_key: photoImageKey }) }
+          })
+          const modu = chatState.get(chat_id)
+          const new_message_id = ret?.data?.message_id
+          if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)
+          return
         }
 
         const cardContent = card_id
