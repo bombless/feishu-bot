@@ -659,7 +659,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
@@ -669,12 +669,12 @@ const { attachTaskSummary } = require('./task-summary')
         }
 
         if (photoImageKey) {
-          ret = await client.im.v1.message.reply({
+          const imageRet = await client.im.v1.message.reply({
             path: { message_id },
             data: { msg_type: 'image', content: JSON.stringify({ image_key: photoImageKey }) }
           })
           const modu = chatState.get(chat_id)
-          const new_message_id = ret?.data?.message_id
+          const new_message_id = imageRet?.data?.message_id
           if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)
           return
         }
