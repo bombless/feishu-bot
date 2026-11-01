@@ -1,6 +1,6 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
-const { capturePhoto } = require('./photo')
+const { capturePhoto, captureVideo } = require('./photo')
 const path = require('node:path')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
@@ -557,10 +557,11 @@ const { attachTaskSummary } = require('./task-summary')
         let card_id
         let taskForThread = null
         let photoImageKey = null
+        let videoFileKey = null
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
-        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'help']
+        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'vid', 'help']
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
@@ -604,6 +605,28 @@ const { attachTaskSummary } = require('./task-summary')
             }
             responseTitle = '摄像头照片'
             responseContent = '已拍摄当前画面。'
+          } else if (command === 'vid') {
+            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
+            const senderOpenId = sender?.sender_id?.open_id
+            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
+              throw new Error('vid 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
+            }
+            const videoPath = await captureVideo(parts.slice(1).join(' ').trim() || undefined)
+            const upload = await client.im.v1.file.create({
+              data: {
+                file_type: 'mp4',
+                file_name: path.basename(videoPath),
+                file: fs.createReadStream(videoPath),
+                duration: 10000
+              }
+            })
+            videoFileKey = upload?.file_key || upload?.data?.file_key
+            if (!videoFileKey) {
+              const detail = [upload?.code != null ? `code=${upload.code}` : '', upload?.msg ? `msg=${upload.msg}` : '', `responseKeys=${Object.keys(upload || {}).join(',') || '(empty)'}`].filter(Boolean).join('; ')
+              throw new Error(`飞书视频上传失败：没有返回 file_key。${detail ? ` 接口响应：${detail}` : ''} 视频已保存在：${videoPath}`)
+            }
+            responseTitle = '摄像头视频'
+            responseContent = `已录制并上传 10 秒视频（1 帧/秒）。本地文件：${videoPath}`
           } else if (command === 'task') {
             const raw = cmd.slice(command.length).trim()
             const separator = raw.indexOf('::')
@@ -664,13 +687,24 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid [摄像头名称] 录制10秒视频（1帧/秒），保存在项目 videos 目录并发送飞书（同样需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
         } catch (e) {
           responseTitle = 'Agent 操作失败'
           responseContent = e.message
+        }
+
+        if (videoFileKey) {
+          const videoRet = await client.im.v1.message.reply({
+            path: { message_id },
+            data: { msg_type: 'media', content: JSON.stringify({ file_key: videoFileKey, duration: 10000 }) }
+          })
+          const modu = chatState.get(chat_id)
+          const new_message_id = videoRet?.data?.message_id
+          if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)
+          return
         }
 
         if (photoImageKey) {
