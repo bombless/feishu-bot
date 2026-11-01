@@ -1,6 +1,7 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
-const { capturePhoto, captureVideo } = require('./photo')
+const { capturePhoto, captureVideo, analyzeVideoMotion } = require('./photo')
+const os = require('node:os')
 const path = require('node:path')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
@@ -56,6 +57,115 @@ const { attachTaskSummary } = require('./task-summary')
   const agentStore = new AgentStore()
   const chatState = new Map()
   const eventLog = new Map()
+  let videoMonitor = null
+  const videoStatsByChat = new Map()
+  const MOTION_THRESHOLD = 6
+
+  function cpuSnapshot () {
+    return os.cpus().reduce((total, cpu) => {
+      const times = cpu.times
+      const busy = times.user + times.nice + times.sys + times.irq
+      return { busy: total.busy + busy, idle: total.idle + times.idle }
+    }, { busy: 0, idle: 0 })
+  }
+
+  function cpuPercentBetween (before, after) {
+    const busy = after.busy - before.busy
+    const total = busy + (after.idle - before.idle)
+    return total > 0 ? busy / total * 100 : 0
+  }
+
+  async function sendMonitorText (chatId, text) {
+    return client.im.v1.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) }
+    })
+  }
+
+  async function sendMonitorVideo (chatId, videoPath, duration = 10000) {
+    const upload = await client.im.v1.file.create({
+      data: {
+        file_type: 'mp4',
+        file_name: path.basename(videoPath),
+        file: fs.createReadStream(videoPath),
+        duration
+      }
+    })
+    const fileKey = upload?.file_key || upload?.data?.file_key
+    if (!fileKey) throw new Error(`上传监控视频失败：${upload?.msg || '没有返回 file_key'}`)
+    return client.im.v1.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: chatId, msg_type: 'media', content: JSON.stringify({ file_key: fileKey, duration }) }
+    })
+  }
+
+  async function runVideoMonitor (chatId, senderOpenId, device) {
+    const state = videoMonitor
+    const videosDir = path.join(__dirname, 'videos')
+    while (videoMonitor === state && state.running) {
+      let videoPath
+      const startedAt = Date.now()
+      const memoryStart = process.memoryUsage().rss
+      let peakRss = memoryStart
+      let peakSystemCpu = 0
+      let peakSystemMemoryBytes = os.totalmem() - os.freemem()
+      const sampleCpu = () => {
+        const next = cpuSnapshot()
+        peakSystemCpu = Math.max(peakSystemCpu, cpuPercentBetween(sampleCpu.previous, next))
+        sampleCpu.previous = next
+        peakRss = Math.max(peakRss, process.memoryUsage().rss)
+        peakSystemMemoryBytes = Math.max(peakSystemMemoryBytes, os.totalmem() - os.freemem())
+      }
+      sampleCpu.previous = cpuSnapshot()
+      const sampler = setInterval(sampleCpu, 500)
+      try {
+        videoPath = await captureVideo(device, 'monitor')
+        const motion = await analyzeVideoMotion(videoPath, MOTION_THRESHOLD)
+        sampleCpu()
+        clearInterval(sampler)
+        const stat = fs.statSync(videoPath)
+        const metrics = {
+          path: videoPath,
+          sizeBytes: stat.size,
+          durationMs: Date.now() - startedAt,
+          memoryPeakBytes: peakRss,
+          memoryDeltaBytes: Math.max(0, peakRss - memoryStart),
+          systemMemoryPeakBytes: peakSystemMemoryBytes,
+          systemMemoryTotalBytes: os.totalmem(),
+          systemMemoryPeakPercent: Number((peakSystemMemoryBytes / os.totalmem() * 100).toFixed(1)),
+          systemCpuPeak: Number(peakSystemCpu.toFixed(1)),
+          motionScore: motion.score,
+          moving: motion.moving,
+          at: new Date().toISOString()
+        }
+        videoStatsByChat.set(chatId, metrics)
+
+        // Keep only the latest monitor clip, including across bot restarts.
+        for (const name of fs.readdirSync(videosDir)) {
+          if (name.startsWith('monitor-') && path.join(videosDir, name) !== videoPath) {
+            try { fs.rmSync(path.join(videosDir, name), { force: true }) } catch (cleanupError) {
+              console.warn('清理旧监控视频失败:', cleanupError?.message || cleanupError)
+            }
+          }
+        }
+
+        if (motion.moving) {
+          await sendMonitorText(chatId, `🐾 检测到画面有明显运动！\n运动分数：${motion.score}（阈值 ${MOTION_THRESHOLD}）\n视频：${path.basename(videoPath)}`)
+          await sendMonitorVideo(chatId, videoPath)
+        }
+      } catch (error) {
+        clearInterval(sampler)
+        console.error('[vid.monitor] monitoring failed:', error?.stack || error)
+        try { await sendMonitorText(chatId, `视频监控遇到错误，已自动停止：${error.message}`) } catch (sendError) {
+          console.error('[vid.monitor] error notification failed:', sendError?.message || sendError)
+        }
+        state.running = false
+        break
+      }
+    }
+    if (videoMonitor === state) videoMonitor = null
+    if (!state.running) console.log(`[vid.monitor] stopped for chat ${chatId}`)
+  }
 
   const taskThreadQueues = new Map()
 
@@ -611,22 +721,79 @@ const { attachTaskSummary } = require('./task-summary')
             if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
               throw new Error('vid 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
             }
-            const videoPath = await captureVideo(parts.slice(1).join(' ').trim() || undefined)
-            const upload = await client.im.v1.file.create({
-              data: {
-                file_type: 'mp4',
-                file_name: path.basename(videoPath),
-                file: fs.createReadStream(videoPath),
-                duration: 10000
+            const subcommand = (parts[1] || '').toLowerCase()
+            if (subcommand === 'start') {
+              if (videoMonitor?.running) {
+                responseTitle = '视频监控已经在运行'
+                responseContent = '当前已有持续监控任务。发送 vid stop 停止，vid show 查看最近一段视频的资源统计。'
+              } else {
+                const device = parts.slice(2).join(' ').trim() || undefined
+                const state = { running: true, chatId: chat_id, senderOpenId }
+                videoMonitor = state
+                runVideoMonitor(chat_id, senderOpenId, device).catch(error => {
+                  console.error('[vid.monitor] unexpected error:', error?.stack || error)
+                })
+                responseTitle = '视频监控已启动'
+                responseContent = '已开始持续监控：每轮录制 10 秒、每秒 1 帧并分析运动；检测到明显运动时会自动发送视频。发送 vid stop 停止，vid show 查看最近一次资源统计。'
               }
-            })
-            videoFileKey = upload?.file_key || upload?.data?.file_key
-            if (!videoFileKey) {
-              const detail = [upload?.code != null ? `code=${upload.code}` : '', upload?.msg ? `msg=${upload.msg}` : '', `responseKeys=${Object.keys(upload || {}).join(',') || '(empty)'}`].filter(Boolean).join('; ')
-              throw new Error(`飞书视频上传失败：没有返回 file_key。${detail ? ` 接口响应：${detail}` : ''} 视频已保存在：${videoPath}`)
+            } else if (subcommand === 'stop') {
+              if (videoMonitor?.running) {
+                videoMonitor.running = false
+                responseTitle = '视频监控正在停止'
+                responseContent = '当前这段 10 秒采集和分析完成后就会停止，不会再开始下一轮。'
+              } else {
+                responseTitle = '视频监控当前未运行'
+                responseContent = '如需开始，请发送 vid start。'
+              }
+            } else if (subcommand === 'show') {
+              const monitorStatus = videoMonitor?.running ? '开启' : videoMonitor ? '停止中' : '关闭'
+              const stats = videoStatsByChat.get(chat_id)
+              if (!stats) {
+                responseTitle = '暂无视频统计'
+                responseContent = `持续监控状态：${monitorStatus}\n还没有完成过监控视频采集。先发送 vid start，完成第一轮后再发送 vid show。`
+              } else {
+                const mib = value => (value / 1024 / 1024).toFixed(2) + ' MiB'
+                let diskSpaceLine = '分区剩余空间：暂时无法读取'
+                try {
+                  const volume = path.parse(stats.path).root
+                  const disk = fs.statfsSync(volume)
+                  const freeBytes = Number(disk.bavail) * Number(disk.bsize)
+                  diskSpaceLine = `分区剩余空间（${volume}）：${mib(freeBytes)}（${freeBytes.toLocaleString()} bytes）`
+                } catch (diskError) {
+                  console.warn('[vid.show] 读取分区剩余空间失败:', diskError?.message || diskError)
+                }
+                responseTitle = '最近一次视频资源统计'
+                responseContent = [
+                  `持续监控状态：${monitorStatus}`,
+                  `视频文件：${path.basename(stats.path)}`,
+                  `磁盘占用：${mib(stats.sizeBytes)}（${stats.sizeBytes.toLocaleString()} bytes）`,
+                  diskSpaceLine,
+                  `机器人进程峰值内存：${mib(stats.memoryPeakBytes)}`,
+                  `采集期间内存增量：${mib(stats.memoryDeltaBytes)}`,
+                  `系统峰值内存占用：${mib(stats.systemMemoryPeakBytes)} / ${mib(stats.systemMemoryTotalBytes)}（${stats.systemMemoryPeakPercent}%）`,
+                  `采集期间系统峰值 CPU：${stats.systemCpuPeak}%`,
+                  `运动分数：${stats.motionScore}（阈值 ${MOTION_THRESHOLD}，${stats.moving ? '检测到运动' : '没有明显运动'}）`,
+                  `统计时间：${new Date(stats.at).toLocaleString('zh-CN', { hour12: false })}`
+                ].join('\n')
+              }
+            } else {
+              const videoPath = await captureVideo(parts.slice(1).join(' ').trim() || undefined)
+              const upload = await client.im.v1.file.create({
+                data: {
+                  file_type: 'mp4',
+                  file_name: path.basename(videoPath),
+                  file: fs.createReadStream(videoPath),
+                  duration: 10000
+                }
+              })
+              videoFileKey = upload?.file_key || upload?.data?.file_key
+              if (!videoFileKey) {
+                const detail = [upload?.code != null ? `code=${upload.code}` : '', upload?.msg ? `msg=${upload.msg}` : '', `responseKeys=${Object.keys(upload || {}).join(',') || '(empty)'}`].filter(Boolean).join('; ')
+                throw new Error(`飞书视频上传失败：没有返回 file_key。视频已保存在：${videoPath}`)
+              }
+              responseTitle = '摄像头视频'
+              responseContent = `已录制并上传 10 秒视频（1 帧/秒）。本地文件：${videoPath}`
             }
-            responseTitle = '摄像头视频'
-            responseContent = `已录制并上传 10 秒视频（1 帧/秒）。本地文件：${videoPath}`
           } else if (command === 'task') {
             const raw = cmd.slice(command.length).trim()
             const separator = raw.indexOf('::')
@@ -687,7 +854,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid [摄像头名称] 录制10秒视频（1帧/秒），保存在项目 videos 目录并发送飞书（同样需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid start [摄像头名称] 开始持续监控（每轮10秒、1帧/秒，检测到运动自动发送视频）；vid stop 停止；vid show 查看最近视频磁盘/内存/CPU统计；vid [摄像头名称] 单次录制并发送。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }

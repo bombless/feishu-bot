@@ -57,10 +57,10 @@ async function capturePhoto (device) {
 
 // Record 10 seconds from the same camera, sampling exactly one output frame per second.
 // Keep the MP4 files in the project so two test clips can be compared later.
-async function captureVideo (device) {
+async function captureVideo (device, prefix = 'vid') {
   const outputDir = path.join(__dirname, 'videos')
   fs.mkdirSync(outputDir, { recursive: true })
-  const output = path.join(outputDir, `vid-${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`)
+  const output = path.join(outputDir, `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`)
   const inputArgs = await getCameraInputArgs(device)
   try {
     await run(FFMPEG_COMMAND, [
@@ -82,4 +82,20 @@ async function captureVideo (device) {
   }
 }
 
-module.exports = { capturePhoto, captureVideo }
+// Compare adjacent one-second samples. The median suppresses the large first
+// difference caused by the initial frame and brief exposure adjustments.
+async function analyzeVideoMotion (videoPath, threshold = 6) {
+  const { stderr } = await run(FFMPEG_COMMAND, [
+    '-hide_banner', '-i', videoPath,
+    '-vf', 'fps=1,scale=320:-1,tblend=all_mode=difference,signalstats,metadata=print',
+    '-f', 'null', '-'
+  ], 20000)
+  const scores = [...stderr.matchAll(/lavfi\.signalstats\.YAVG=([\d.]+)/g)].map(match => Number(match[1])).filter(Number.isFinite)
+  if (scores.length < 3) throw new Error(`运动分析失败：只取得 ${scores.length} 个有效帧差分数。`)
+  const sorted = [...scores].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+  return { moving: median >= threshold, score: Number(median.toFixed(3)), threshold, samples: scores }
+}
+
+module.exports = { capturePhoto, captureVideo, analyzeVideoMotion }
