@@ -590,8 +590,13 @@ const { attachTaskSummary } = require('./task-summary')
               const upload = await client.im.v1.image.create({
                 data: { image_type: 'message', image: fs.createReadStream(imagePath) }
               })
-              photoImageKey = upload?.data?.image_key
-              if (!photoImageKey) throw new Error('飞书图片上传失败：没有返回 image_key。')
+              // The Feishu SDK image.create() returns the API response's `data` payload directly,
+              // so image_key is normally at the top level. Keep the nested path as a compatibility fallback.
+              photoImageKey = upload?.image_key || upload?.data?.image_key
+              if (!photoImageKey) {
+                const detail = [upload?.code != null ? `code=${upload.code}` : '', upload?.msg ? `msg=${upload.msg}` : '', `responseKeys=${Object.keys(upload || {}).join(',') || '(empty)'}`].filter(Boolean).join('; ')
+                throw new Error(`飞书图片上传失败：没有返回 image_key。${detail ? ` 接口响应：${detail}` : ''}`)
+              }
             } finally {
               try { fs.rmSync(imagePath, { force: true }) } catch (cleanupError) {
                 console.warn('清理临时照片失败:', cleanupError?.message || cleanupError)
