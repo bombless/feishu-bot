@@ -82,6 +82,28 @@ async function captureVideo (device, prefix = 'vid') {
   }
 }
 
+// The secondary RTSP camera is captured by cap.ps1. Pass the destination path
+// to the script and reuse the resulting MP4 for upload and motion analysis.
+async function captureExternalVideo (prefix = 'monitor-1') {
+  if (process.platform !== 'win32') throw new Error('外接 RTSP 摄像头采集脚本仅支持 Windows。')
+  const script = path.join(__dirname, 'cap.ps1')
+  if (!fs.existsSync(script)) throw new Error(`找不到外接摄像头采集脚本：${script}`)
+  const outputDir = path.join(__dirname, 'videos')
+  fs.mkdirSync(outputDir, { recursive: true })
+  const output = path.join(outputDir, `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`)
+  try {
+    await run('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', script, output
+    ], 180000)
+    if (!fs.existsSync(output) || fs.statSync(output).size === 0) throw new Error('外接摄像头脚本没有生成有效视频。')
+    return output
+  } catch (error) {
+    try { fs.rmSync(output, { force: true }) } catch {}
+    throw error
+  }
+}
+
 // Compare adjacent one-second samples. The median suppresses the large first
 // difference caused by the initial frame and brief exposure adjustments.
 async function analyzeVideoMotion (videoPath, threshold = 6) {
@@ -98,4 +120,4 @@ async function analyzeVideoMotion (videoPath, threshold = 6) {
   return { moving: median >= threshold, score: Number(median.toFixed(3)), threshold, samples: scores }
 }
 
-module.exports = { capturePhoto, captureVideo, analyzeVideoMotion }
+module.exports = { capturePhoto, captureVideo, captureExternalVideo, analyzeVideoMotion }

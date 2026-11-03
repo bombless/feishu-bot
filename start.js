@@ -1,6 +1,6 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
-const { capturePhoto, captureVideo, analyzeVideoMotion } = require('./photo')
+const { capturePhoto, captureVideo, captureExternalVideo, analyzeVideoMotion } = require('./photo')
 const os = require('node:os')
 const path = require('node:path')
 const CaveGame = require('./module_cave_game')
@@ -57,7 +57,7 @@ const { attachTaskSummary } = require('./task-summary')
   const agentStore = new AgentStore()
   const chatState = new Map()
   const eventLog = new Map()
-  let videoMonitor = null
+  const videoMonitors = new Map()
   const videoStatsByChat = new Map()
   const MOTION_THRESHOLD = 6
 
@@ -99,10 +99,11 @@ const { attachTaskSummary } = require('./task-summary')
     })
   }
 
-  async function runVideoMonitor (chatId, senderOpenId, device) {
-    const state = videoMonitor
+  async function runVideoMonitor (chatId, senderOpenId, device, sourceId) {
+    const monitorKey = `${chatId}:${sourceId}`
+    const state = videoMonitors.get(monitorKey)
     const videosDir = path.join(__dirname, 'videos')
-    while (videoMonitor === state && state.running) {
+    while (videoMonitors.get(monitorKey) === state && state.running) {
       let videoPath
       const startedAt = Date.now()
       const memoryStart = process.memoryUsage().rss
@@ -119,7 +120,9 @@ const { attachTaskSummary } = require('./task-summary')
       sampleCpu.previous = cpuSnapshot()
       const sampler = setInterval(sampleCpu, 500)
       try {
-        videoPath = await captureVideo(device, 'monitor')
+        videoPath = sourceId === '1'
+          ? await captureExternalVideo('monitor-1')
+          : await captureVideo(device, 'monitor-0')
         const motion = await analyzeVideoMotion(videoPath, MOTION_THRESHOLD)
         sampleCpu()
         clearInterval(sampler)
@@ -138,11 +141,11 @@ const { attachTaskSummary } = require('./task-summary')
           moving: motion.moving,
           at: new Date().toISOString()
         }
-        videoStatsByChat.set(chatId, metrics)
+        videoStatsByChat.set(monitorKey, metrics)
 
         // Keep only the latest monitor clip, including across bot restarts.
         for (const name of fs.readdirSync(videosDir)) {
-          if (name.startsWith('monitor-') && path.join(videosDir, name) !== videoPath) {
+          if (name.startsWith(`monitor-${sourceId}-`) && path.join(videosDir, name) !== videoPath) {
             try { fs.rmSync(path.join(videosDir, name), { force: true }) } catch (cleanupError) {
               console.warn('清理旧监控视频失败:', cleanupError?.message || cleanupError)
             }
@@ -163,7 +166,7 @@ const { attachTaskSummary } = require('./task-summary')
         break
       }
     }
-    if (videoMonitor === state) videoMonitor = null
+    if (videoMonitors.get(monitorKey) === state) videoMonitors.delete(monitorKey)
     if (!state.running) console.log(`[vid.monitor] stopped for chat ${chatId}`)
   }
 
@@ -693,6 +696,7 @@ const { attachTaskSummary } = require('./task-summary')
           } else if (command === 'photo') {
             const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
             const senderOpenId = sender?.sender_id?.open_id
+            console.log('photo command received from open_id:', senderOpenId, 'allowedOpenIds:', allowedOpenIds)
             if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
               throw new Error('photo 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
             }
@@ -721,36 +725,43 @@ const { attachTaskSummary } = require('./task-summary')
             if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
               throw new Error('vid 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
             }
-            const subcommand = (parts[1] || '').toLowerCase()
+            const firstArg = (parts[1] || '').toLowerCase()
+            const explicitSource = firstArg === '0' || firstArg === '1'
+            const sourceId = explicitSource ? firstArg : '0'
+            const subcommand = explicitSource ? (parts[2] || '').toLowerCase() : firstArg
+            const argumentStart = explicitSource ? 3 : 2
+            const monitorKey = `${chat_id}:${sourceId}`
+            const monitorState = videoMonitors.get(monitorKey)
+            const sourceLabel = sourceId === '1' ? '外接摄像头' : '原摄像头'
             if (subcommand === 'start') {
-              if (videoMonitor?.running) {
+              if (monitorState?.running) {
                 responseTitle = '视频监控已经在运行'
-                responseContent = '当前已有持续监控任务。发送 vid stop 停止，vid show 查看最近一段视频的资源统计。'
+                responseContent = `${sourceLabel}当前已有持续监控任务。发送 vid ${sourceId} stop 停止，vid ${sourceId} show 查看资源统计。`
               } else {
-                const device = parts.slice(2).join(' ').trim() || undefined
-                const state = { running: true, chatId: chat_id, senderOpenId }
-                videoMonitor = state
-                runVideoMonitor(chat_id, senderOpenId, device).catch(error => {
+                const device = parts.slice(argumentStart).join(' ').trim() || undefined
+                const state = { running: true, chatId: chat_id, senderOpenId, sourceId }
+                videoMonitors.set(monitorKey, state)
+                runVideoMonitor(chat_id, senderOpenId, device, sourceId).catch(error => {
                   console.error('[vid.monitor] unexpected error:', error?.stack || error)
                 })
                 responseTitle = '视频监控已启动'
-                responseContent = '已开始持续监控：每轮录制 10 秒、每秒 1 帧并分析运动；检测到明显运动时会自动发送视频。发送 vid stop 停止，vid show 查看最近一次资源统计。'
+                responseContent = `已开始监控${sourceLabel}：每轮采集 10 秒、每秒 1 帧并分析运动；检测到明显运动时会自动发送视频。发送 vid ${sourceId} stop 停止，vid ${sourceId} show 查看资源统计。`
               }
             } else if (subcommand === 'stop') {
-              if (videoMonitor?.running) {
-                videoMonitor.running = false
+              if (monitorState?.running) {
+                monitorState.running = false
                 responseTitle = '视频监控正在停止'
-                responseContent = '当前这段 10 秒采集和分析完成后就会停止，不会再开始下一轮。'
+                responseContent = `${sourceLabel}当前这段 10 秒采集和分析完成后就会停止，不会再开始下一轮。`
               } else {
                 responseTitle = '视频监控当前未运行'
-                responseContent = '如需开始，请发送 vid start。'
+                responseContent = `如需开始，请发送 vid ${sourceId} start。`
               }
             } else if (subcommand === 'show') {
-              const monitorStatus = videoMonitor?.running ? '开启' : videoMonitor ? '停止中' : '关闭'
-              const stats = videoStatsByChat.get(chat_id)
+              const monitorStatus = monitorState?.running ? '开启' : monitorState ? '停止中' : '关闭'
+              const stats = videoStatsByChat.get(monitorKey)
               if (!stats) {
                 responseTitle = '暂无视频统计'
-                responseContent = `持续监控状态：${monitorStatus}\n还没有完成过监控视频采集。先发送 vid start，完成第一轮后再发送 vid show。`
+                responseContent = `摄像头：${sourceLabel}\n持续监控状态：${monitorStatus}\n还没有完成过监控视频采集。先发送 vid ${sourceId} start，完成第一轮后再发送 vid ${sourceId} show。`
               } else {
                 const mib = value => (value / 1024 / 1024).toFixed(2) + ' MiB'
                 let diskSpaceLine = '分区剩余空间：暂时无法读取'
@@ -762,8 +773,9 @@ const { attachTaskSummary } = require('./task-summary')
                 } catch (diskError) {
                   console.warn('[vid.show] 读取分区剩余空间失败:', diskError?.message || diskError)
                 }
-                responseTitle = '最近一次视频资源统计'
+                responseTitle = `${sourceLabel}最近一次视频资源统计`
                 responseContent = [
+                  `摄像头：${sourceLabel}`,
                   `持续监控状态：${monitorStatus}`,
                   `视频文件：${path.basename(stats.path)}`,
                   `磁盘占用：${mib(stats.sizeBytes)}（${stats.sizeBytes.toLocaleString()} bytes）`,
@@ -777,7 +789,9 @@ const { attachTaskSummary } = require('./task-summary')
                 ].join('\n')
               }
             } else {
-              const videoPath = await captureVideo(parts.slice(1).join(' ').trim() || undefined)
+              const videoPath = sourceId === '1'
+                ? await captureExternalVideo('vid-1')
+                : await captureVideo(explicitSource ? (parts.slice(2).join(' ').trim() || undefined) : (parts.slice(1).join(' ').trim() || undefined))
               const upload = await client.im.v1.file.create({
                 data: {
                   file_type: 'mp4',
@@ -791,8 +805,8 @@ const { attachTaskSummary } = require('./task-summary')
                 const detail = [upload?.code != null ? `code=${upload.code}` : '', upload?.msg ? `msg=${upload.msg}` : '', `responseKeys=${Object.keys(upload || {}).join(',') || '(empty)'}`].filter(Boolean).join('; ')
                 throw new Error(`飞书视频上传失败：没有返回 file_key。视频已保存在：${videoPath}`)
               }
-              responseTitle = '摄像头视频'
-              responseContent = `已录制并上传 10 秒视频（1 帧/秒）。本地文件：${videoPath}`
+              responseTitle = `${sourceLabel}视频`
+              responseContent = `已录制并上传${sourceLabel}10 秒视频。本地文件：${videoPath}`
             }
           } else if (command === 'task') {
             const raw = cmd.slice(command.length).trim()
@@ -854,7 +868,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid start [摄像头名称] 开始持续监控（每轮10秒、1帧/秒，检测到运动自动发送视频）；vid stop 停止；vid show 查看最近视频磁盘/内存/CPU统计；vid [摄像头名称] 单次录制并发送。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid 0 [start|stop|show] 使用原摄像头；vid 1 [start|stop|show] 使用 cap.ps1 外接摄像头（vid 1 单次录制，vid 1 start 持续监控）；不带编号时兼容原有 vid 命令。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
