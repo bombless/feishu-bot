@@ -2,6 +2,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { captureExternalVideo } = require('./rtsp-camera')
 const FFMPEG = path.join(__dirname, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const FFMPEG_COMMAND = fs.existsSync(FFMPEG) ? FFMPEG : 'ffmpeg'
 
@@ -82,27 +83,6 @@ async function captureVideo (device, prefix = 'vid') {
   }
 }
 
-// The secondary RTSP camera is captured by cap.ps1. Pass the destination path
-// to the script and reuse the resulting MP4 for upload and motion analysis.
-async function captureExternalVideo (prefix = 'monitor-1') {
-  if (process.platform !== 'win32') throw new Error('外接 RTSP 摄像头采集脚本仅支持 Windows。')
-  const script = path.join(__dirname, 'cap.ps1')
-  if (!fs.existsSync(script)) throw new Error(`找不到外接摄像头采集脚本：${script}`)
-  const outputDir = path.join(__dirname, 'videos')
-  fs.mkdirSync(outputDir, { recursive: true })
-  const output = path.join(outputDir, `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`)
-  try {
-    await run('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', script, output
-    ], 180000)
-    if (!fs.existsSync(output) || fs.statSync(output).size === 0) throw new Error('外接摄像头脚本没有生成有效视频。')
-    return output
-  } catch (error) {
-    try { fs.rmSync(output, { force: true }) } catch {}
-    throw error
-  }
-}
 
 // Compare adjacent one-second samples. The median suppresses the large first
 // difference caused by the initial frame and brief exposure adjustments.

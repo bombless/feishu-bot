@@ -1,6 +1,7 @@
 const Lark = require('@larksuiteoapi/node-sdk')
 const fs = require('node:fs')
 const { capturePhoto, captureVideo, captureExternalVideo, analyzeVideoMotion } = require('./photo')
+const { captureAudio } = require('./audio')
 const os = require('node:os')
 const path = require('node:path')
 const CaveGame = require('./module_cave_game')
@@ -671,10 +672,11 @@ const { attachTaskSummary } = require('./task-summary')
         let taskForThread = null
         let photoImageKey = null
         let videoFileKey = null
+        let audioFileKey = null
         const parts = cmd.split(/\s+/)
         const command = parts[0].toLowerCase()
 
-        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'vid', 'help']
+        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'vid', 'audio', 'help']
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
@@ -808,6 +810,27 @@ const { attachTaskSummary } = require('./task-summary')
               responseTitle = `${sourceLabel}视频`
               responseContent = `已录制并上传${sourceLabel}10 秒视频。本地文件：${videoPath}`
             }
+          } else if (command === 'audio') {
+            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
+            const senderOpenId = sender?.sender_id?.open_id
+            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
+              throw new Error('audio 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许录音的飞书用户 open_id。')
+            }
+            const sourceId = (parts[1] || '0').toLowerCase()
+            if (!['0', '1'].includes(sourceId)) throw new Error('用法：audio [0|1] [本机麦克风设备名称]；0 为本机麦克风，1 为 RTSP 摄像头音频。')
+            const device = sourceId === '0' ? parts.slice(2).join(' ').trim() || undefined : undefined
+            const audioPath = await captureAudio(sourceId, device)
+            try {
+              const upload = await client.im.v1.file.create({
+                data: { file_type: 'opus', file_name: path.basename(audioPath), file: fs.createReadStream(audioPath), duration: 10000 }
+              })
+              audioFileKey = upload?.file_key || upload?.data?.file_key
+              if (!audioFileKey) throw new Error(`飞书音频上传失败：没有返回 file_key。`)
+            } finally {
+              try { fs.rmSync(audioPath, { force: true }) } catch (cleanupError) { console.warn('清理临时音频失败:', cleanupError?.message || cleanupError) }
+            }
+            responseTitle = '10 秒音频采集完成'
+            responseContent = `已从${sourceId === '1' ? 'RTSP 摄像头' : '本机麦克风'}采集并上传 10 秒 Opus 音频。`
           } else if (command === 'task') {
             const raw = cmd.slice(command.length).trim()
             const separator = raw.indexOf('::')
@@ -868,7 +891,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid 0 [start|stop|show] 使用原摄像头；vid 1 [start|stop|show] 使用 cap.ps1 外接摄像头（vid 1 单次录制，vid 1 start 持续监控）；不带编号时兼容原有 vid 命令。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid 0 [start|stop|show] 使用原摄像头；vid 1 [start|stop|show] 使用 vault 中 RTSP_URL 配置的外接摄像头；不带编号时兼容原有 vid 命令；\naudio 0 [麦克风设备名称] 采集本机麦克风 10 秒音频；audio 1 采集 vault 中 RTSP_URL 的 10 秒音频。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
@@ -884,6 +907,17 @@ const { attachTaskSummary } = require('./task-summary')
           })
           const modu = chatState.get(chat_id)
           const new_message_id = videoRet?.data?.message_id
+          if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)
+          return
+        }
+
+        if (audioFileKey) {
+          const audioRet = await client.im.v1.message.reply({
+            path: { message_id },
+            data: { msg_type: 'audio', content: JSON.stringify({ file_key: audioFileKey, duration: 10000 }) }
+          })
+          const modu = chatState.get(chat_id)
+          const new_message_id = audioRet?.data?.message_id
           if (typeof modu?.setMessageId === 'function') modu.setMessageId(new_message_id)
           return
         }
