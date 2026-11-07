@@ -687,6 +687,9 @@ const { attachTaskSummary } = require('./task-summary')
         let videoFileKey = null
         let audioFileKey = null
         const parts = cmd.split(/\s+/)
+        // Accept vid.0 / vid.1 as aliases for vid 0 / vid 1.
+        const vidAlias = /^vid\.([01])$/i.exec(parts[0])
+        if (vidAlias) parts.splice(0, 1, 'vid', vidAlias[1])
         const command = parts[0].toLowerCase()
 
         const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'otp', 'photo', 'vid', 'audio', 'help']
