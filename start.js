@@ -4,6 +4,7 @@ const { capturePhoto, captureVideo, captureExternalVideo, analyzeVideoMotion } =
 const { captureAudio } = require('./audio')
 const os = require('node:os')
 const path = require('node:path')
+const { randomInt, timingSafeEqual } = require('node:crypto')
 const CaveGame = require('./module_cave_game')
 const Chat = require('./chat')
 const MineGame = require('./module_mine_game')
@@ -15,6 +16,18 @@ const { attachTaskSummary } = require('./task-summary')
 
 ;(async () => {
   const config = await getConfig()
+  const cameraOtp = String(randomInt(0, 1000000)).padStart(6, '0')
+  const cameraOtpExpiresAt = Date.now() + 5 * 60 * 1000
+  let cameraOtpConsumed = false
+  let cameraOtpFailedAttempts = 0
+  const configuredCameraOpenIds = new Set((process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean))
+  const cameraAuthorizedOpenIds = new Set()
+
+  function isCameraAuthorized (openId) {
+    return Boolean(openId && (configuredCameraOpenIds.has(openId) || cameraAuthorizedOpenIds.has(openId)))
+  }
+
+  console.log('🔐 音视频采集授权 OTP：' + cameraOtp + '（5 分钟内发送 otp ' + cameraOtp + ' 完成授权；仅首个验证成功的用户可绑定）')
   const chat = new Chat({ url: config.url, apiKey: config.apiKey, model: config.model, modelsUrl: config.modelsUrl })
   const filteredModelsPath = path.join(__dirname, 'data', 'filtered-models.json')
   let filteredModels = new Set()
@@ -674,9 +687,12 @@ const { attachTaskSummary } = require('./task-summary')
         let videoFileKey = null
         let audioFileKey = null
         const parts = cmd.split(/\s+/)
+        // Accept vid.0 / vid.1 as aliases for vid 0 / vid 1.
+        const vidAlias = /^vid\.([01])$/i.exec(parts[0])
+        if (vidAlias) parts.splice(0, 1, 'vid', vidAlias[1])
         const command = parts[0].toLowerCase()
 
-        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'photo', 'vid', 'audio', 'help']
+        const KNOWN_COMMANDS = ['d', 'ls', 'dir', 'task', 'run', 'list', 'history', 'tasks', 'id', 'taskinfo', 'mine', 'cave', 'models', 'otp', 'photo', 'vid', 'audio', 'help']
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
@@ -695,12 +711,35 @@ const { attachTaskSummary } = require('./task-summary')
                 data: JSON.stringify(directoryCard(result).card.data)
               }
             }).then(res => res.data.card_id)
-          } else if (command === 'photo') {
-            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
+          } else if (command === 'otp') {
             const senderOpenId = sender?.sender_id?.open_id
-            console.log('photo command received from open_id:', senderOpenId, 'allowedOpenIds:', allowedOpenIds)
-            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
-              throw new Error('photo 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
+            const submittedOtp = parts[1] || ''
+            if (!senderOpenId) throw new Error('无法识别发送者身份，OTP 授权失败。')
+            if (isCameraAuthorized(senderOpenId)) {
+              responseTitle = '音视频采集权限已授权'
+              responseContent = '当前发送者已经有 photo、vid、audio 使用权限。'
+            } else if (cameraOtpConsumed) {
+              throw new Error('本次启动的 OTP 已使用或失效。请重启机器人获取新的 OTP。')
+            } else if (Date.now() > cameraOtpExpiresAt) {
+              cameraOtpConsumed = true
+              throw new Error('OTP 已超过 5 分钟有效期，请重启机器人获取新的 OTP。')
+            } else if (cameraOtpFailedAttempts >= 5) {
+              cameraOtpConsumed = true
+              throw new Error('OTP 错误次数过多，本次验证码已失效。请重启机器人获取新的 OTP。')
+            } else if (!/^[0-9]{6}$/.test(submittedOtp) || !timingSafeEqual(Buffer.from(submittedOtp), Buffer.from(cameraOtp))) {
+              cameraOtpFailedAttempts += 1
+              if (cameraOtpFailedAttempts >= 5) cameraOtpConsumed = true
+              throw new Error('OTP 不正确（剩余尝试次数：' + Math.max(0, 5 - cameraOtpFailedAttempts) + '）。')
+            } else {
+              cameraOtpConsumed = true
+              cameraAuthorizedOpenIds.add(senderOpenId)
+              responseTitle = '音视频采集权限授权成功'
+              responseContent = '当前飞书账号已绑定，可直接使用 photo、vid、audio。授权持续到机器人进程退出或重启。'
+            }
+          } else if (command === 'photo') {
+            const senderOpenId = sender?.sender_id?.open_id
+            if (!isCameraAuthorized(senderOpenId)) {
+              throw new Error('photo 命令未授权。请先发送 otp <6位验证码> 完成授权，或配置 PHOTO_ALLOWED_OPEN_IDS。')
             }
             const imagePath = await capturePhoto(parts.slice(1).join(' ').trim() || undefined)
             try {
@@ -722,10 +761,9 @@ const { attachTaskSummary } = require('./task-summary')
             responseTitle = '摄像头照片'
             responseContent = '已拍摄当前画面。'
           } else if (command === 'vid') {
-            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
             const senderOpenId = sender?.sender_id?.open_id
-            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
-              throw new Error('vid 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许拍摄的飞书用户 open_id。')
+            if (!isCameraAuthorized(senderOpenId)) {
+              throw new Error('vid 命令未授权。请先发送 otp <6位验证码> 完成授权，或配置 PHOTO_ALLOWED_OPEN_IDS。')
             }
             const firstArg = (parts[1] || '').toLowerCase()
             const explicitSource = firstArg === '0' || firstArg === '1'
@@ -811,10 +849,9 @@ const { attachTaskSummary } = require('./task-summary')
               responseContent = `已录制并上传${sourceLabel}10 秒视频。本地文件：${videoPath}`
             }
           } else if (command === 'audio') {
-            const allowedOpenIds = (process.env.PHOTO_ALLOWED_OPEN_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
             const senderOpenId = sender?.sender_id?.open_id
-            if (!allowedOpenIds.length || !senderOpenId || !allowedOpenIds.includes(senderOpenId)) {
-              throw new Error('audio 命令未授权。请在运行环境中设置 PHOTO_ALLOWED_OPEN_IDS，仅填写允许录音的飞书用户 open_id。')
+            if (!isCameraAuthorized(senderOpenId)) {
+              throw new Error('audio 命令未授权。请先发送 otp <6位验证码> 完成授权，或配置 PHOTO_ALLOWED_OPEN_IDS。')
             }
             const sourceId = (parts[1] || '0').toLowerCase()
             if (!['0', '1'].includes(sourceId)) throw new Error('用法：audio [0|1] [本机麦克风设备名称]；0 为本机麦克风，1 为 RTSP 摄像头音频。')
@@ -891,7 +928,7 @@ const { attachTaskSummary } = require('./task-summary')
                   responseTitle = '模型列表'
                 } else {
                   responseTitle = '帮助目录'
-                  responseContent = `help 本帮助目录；\nphoto [摄像头名称] 拍摄当前摄像头画面（需配置 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg）；\nvid 0 [start|stop|show] 使用原摄像头；vid 1 [start|stop|show] 使用 vault 中 RTSP_URL 配置的外接摄像头；不带编号时兼容原有 vid 命令；\naudio 0 [麦克风设备名称] 采集本机麦克风 10 秒音频；audio 1 采集 vault 中 RTSP_URL 的 10 秒音频。需要 PHOTO_ALLOWED_OPEN_IDS 和 FFmpeg；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
+                  responseContent = `help 本帮助目录；\notp <6位验证码> 使用启动时标准输出打印的 OTP 授权当前飞书账号（5 分钟内有效，单次绑定）；\nphoto [摄像头名称] 拍摄当前摄像头画面（需先 OTP 授权或配置 PHOTO_ALLOWED_OPEN_IDS，并安装 FFmpeg）；\nvid 0 [start|stop|show] 使用原摄像头；vid 1 [start|stop|show] 使用 vault 中 RTSP_URL 配置的外接摄像头；不带编号时兼容原有 vid 命令；\naudio 0 [麦克风设备名称] 采集本机麦克风 10 秒音频；audio 1 采集 vault 中 RTSP_URL 的 10 秒音频（需先 OTP 授权或配置 PHOTO_ALLOWED_OPEN_IDS，并安装 FFmpeg）；\ncave 洞穴游戏；\nmodels 模型列表；\nmine 扫雷游戏；\nd [D:\\路径] 列举 D 盘目录；\ntask D:\\路径 :: 任务描述 派发 codex exec 任务；\nrun <任务描述> 使用当前模型和工具循环执行任务；\nlist [数量] 查询持久化任务状态；\nid <任务ID> 查询任务消息和工具调用历史；\nhistory [数量] 查询任务历史；\ntaskinfo <任务ID> 查询任务详情；`
                 }
             }
           }
