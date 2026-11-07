@@ -5,7 +5,7 @@ const { spawnSync } = require('node:child_process')
 const SERVICE = 'feishu-bot'
 const KEYS = [
   'URL', 'KEY', 'MODEL', 'MODELS_URL', 'FEISHU_APP_ID', 'FEISHU_APP_SECRET',
-  'CODEX_BIN', 'AGENT_PORT', 'AGENT_HOST'
+  'CODEX_BIN', 'AGENT_PORT', 'AGENT_HOST', 'RTSP_URL'
 ]
 
 function vaultCommand (args, input) {
