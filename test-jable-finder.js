@@ -30,3 +30,13 @@ test('returns OCR title when Jable has no result', async () => {
   assert.equal(result.code, 'JUR-828')
   assert.match(formatResult(result), /JUR-828/)
 })
+
+test('returns all matching catalogue codes from a multi-poster image', async () => {
+  const result = await findByImage(Buffer.from('fixture'), {
+    recognizeImage: async () => ({ text: 'SNOS-377 JUR-828', codes: ['SNOS-377', 'JUR-828'], title: 'TOP 5 DRAMAS' }),
+    searchJable: async code => [{ title: code + ' sample', url: 'https://jable.tv/videos/' + code.toLowerCase() + '/' }]
+  })
+  assert.equal(result.matches.length, 2)
+  assert.match(formatResult(result), /SNOS-377/)
+  assert.match(formatResult(result), /JUR-828/)
+})
