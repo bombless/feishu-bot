@@ -12,6 +12,7 @@ const { runChatTask } = require('./agent_runner')
 const { listDirectory, normalizeCwd, runCodex } = require('./agent_server')
 const { getConfig } = require('./env-util')
 const { attachTaskSummary } = require('./task-summary')
+const { findByImage, formatResult } = require('./jable-finder')
 
 ;(async () => {
   const config = await getConfig()
@@ -659,11 +660,13 @@ const { attachTaskSummary } = require('./task-summary')
         }
       },
       'im.message.receive_v1': async data => {
-        const { event_id, message: { chat_id, content, create_time, message_id }, sender } = data
+        const { event_id, message: { chat_id, content, create_time, message_id, message_type }, sender } = data
         if (create_time * 1000 + 10000 < +new Date()) return
         if (eventLog.has(event_id)) return
         eventLog.set(event_id, event_id)
-        const cmd = JSON.parse(content).text.trim()
+        const parsedContent = JSON.parse(content)
+        const cmd = String(parsedContent.text || '').trim()
+        const isImageMessage = message_type === 'image' || Boolean(parsedContent.image_key)
         if (cmd === '.quit') chatState.delete(chat_id)
 
         let responseTitle
@@ -680,7 +683,34 @@ const { attachTaskSummary } = require('./task-summary')
         const isKnownCommand = KNOWN_COMMANDS.includes(command) || cmd.startsWith('models')
 
         try {
-          if (!isKnownCommand) {
+          if (isImageMessage) {
+            const imageKey = parsedContent.image_key
+            if (!imageKey) throw new Error('图片消息缺少 image_key。')
+            const downloaded = await client.im.v1.messageResource.get({
+              path: { message_id, file_key: imageKey },
+              params: { type: 'image' }
+            })
+            const stream = downloaded && downloaded.data ? downloaded.data : downloaded
+            let imageBuffer
+            if (Buffer.isBuffer(stream)) imageBuffer = stream
+            else if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+              const chunks = []
+              for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+              imageBuffer = Buffer.concat(chunks)
+            } else if (stream && stream.pipe) {
+              imageBuffer = await new Promise((resolve, reject) => {
+                const chunks = []
+                stream.on('data', chunk => chunks.push(Buffer.from(chunk)))
+                stream.on('end', () => resolve(Buffer.concat(chunks)))
+                stream.on('error', reject)
+              })
+            } else throw new Error('飞书图片下载接口没有返回可读取的数据流。')
+            const result = await findByImage(imageBuffer, {
+              ocr: { apiUrl: config.url, apiKey: config.apiKey, model: config.visionModel || config.model, mimeType: 'image/jpeg' }
+            })
+            responseTitle = result.found ? '找到影片' : '未找到 Jable 影片'
+            responseContent = formatResult(result)
+          } else if (!isKnownCommand) {
             const task = await startRunTask(cmd, chat_id, sender?.sender_id?.open_id, config, chat.model)
             responseTitle = '模型 Agent 任务已自动开启'
             responseContent = formatTask(task) + '\n\n正在后台执行，执行完毕后将直接发送结果。'
