@@ -18,11 +18,12 @@ async function recognizeImage (image, options) {
   options = options || {}
   if (!options.apiUrl || !options.apiKey || !options.model) throw new Error('找片 OCR 未配置：需要 URL、KEY 和支持图片输入的 MODEL。')
   const buffer = Buffer.isBuffer(image) ? image : Buffer.from(image)
+  const mimeType = options.mimeType || (buffer.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image/png' : (buffer.toString('ascii', 0, 4) === 'RIFF' ? 'image/webp' : 'image/jpeg'))
   const response = await (options.fetchImpl || fetch)(options.apiUrl, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + options.apiKey },
     body: JSON.stringify({ model: options.model, stream: false, temperature: 0, messages: [{ role: 'user', content: [
       { type: 'text', text: '识别图片中的影片番号、演员姓名、标题。只返回 JSON：{"text":"原始识别文字","codes":["番号"],"actor":"演员名","title":"标题"}。不要猜测。' },
-      { type: 'image_url', image_url: { url: 'data:' + (options.mimeType || 'image/jpeg') + ';base64,' + buffer.toString('base64') } }
+      { type: 'image_url', image_url: { url: 'data:' + mimeType + ';base64,' + buffer.toString('base64') } }
     ] }] })
   })
   const body = await response.text()
