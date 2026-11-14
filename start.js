@@ -690,7 +690,7 @@ const { findByImage, formatResult } = require('./jable-finder')
               path: { message_id, file_key: imageKey },
               params: { type: 'image' }
             })
-            const stream = downloaded && downloaded.data ? downloaded.data : downloaded
+            const stream = downloaded && typeof downloaded.getReadableStream === 'function' ? downloaded.getReadableStream() : (downloaded && downloaded.data ? downloaded.data : downloaded)
             let imageBuffer
             if (Buffer.isBuffer(stream)) imageBuffer = stream
             else if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
