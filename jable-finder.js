@@ -73,7 +73,7 @@ async function findByImage (image, options) {
     if (exact && !matches.some(item => item.code === code)) matches.push({ code, title: exact.title, url: exact.url })
   }
   if (matches.length) return { found: true, code: matches[0].code, actor, title: matches[0].title, url: matches[0].url, matches, candidates }
-  if (candidates.length) return { found: true, code: codes[0] || null, actor, title: candidates[0].title, url: candidates[0].url, matches: candidates.map(item => ({ code: null, title: item.title, url: item.url })), candidates }
+  if (candidates.length && !codes.length) return { found: true, code: null, actor, title: candidates[0].title, url: candidates[0].url, matches: candidates.map(item => ({ code: null, title: item.title, url: item.url })), candidates }
   return { found: false, code: codes[0] || null, codes, actor, title: title || codes[0] || '未能识别影片标题', matches: [], candidates: [] }
 }
 function formatResult (result) {
