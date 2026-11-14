@@ -63,18 +63,23 @@ async function findByImage (image, options) {
   const actor = metadata.actor || parsed.actor
   const title = metadata.title || parsed.title
   const search = options.searchJable || searchJable
+  const matches = []
   const candidates = []
-  for (const query of codes.concat(actor ? [actor] : [])) {
-    const results = await search(query, options.jable || {})
+  for (const code of codes) {
+    const results = await search(code, options.jable || {})
     candidates.push.apply(candidates, results)
-    const exact = candidates.find(item => codes.some(code => (item.title + ' ' + item.url).toUpperCase().indexOf(code) >= 0))
-    if (exact) return { found: true, code: codes[0] || null, actor, title: exact.title, url: exact.url, candidates }
+    const exact = results.find(item => (item.title + ' ' + item.url).toUpperCase().indexOf(code) >= 0)
+    if (exact && !matches.some(item => item.code === code)) matches.push({ code, title: exact.title, url: exact.url })
   }
-  if (candidates.length) return { found: true, code: codes[0] || null, actor, title: candidates[0].title, url: candidates[0].url, candidates }
-  return { found: false, code: codes[0] || null, codes, actor, title: title || codes[0] || '未能识别影片标题', candidates: [] }
+  if (matches.length) return { found: true, code: matches[0].code, actor, title: matches[0].title, url: matches[0].url, matches, candidates }
+  if (candidates.length) return { found: true, code: codes[0] || null, actor, title: candidates[0].title, url: candidates[0].url, matches: candidates.map(item => ({ code: null, title: item.title, url: item.url })), candidates }
+  return { found: false, code: codes[0] || null, codes, actor, title: title || codes[0] || '未能识别影片标题', matches: [], candidates: [] }
 }
 function formatResult (result) {
-  if (result.found) return '找到 Jable 影片：\n' + result.title + '\n' + result.url + (result.code ? '\n番号：' + result.code : '')
+  if (result.found) {
+    const matches = result.matches || [{ code: result.code, title: result.title, url: result.url }]
+    return '找到 ' + matches.length + ' 条 Jable 影片：\n' + matches.map((item, index) => (index + 1) + '. ' + item.title + (item.code ? '（' + item.code + '）' : '') + '\n' + item.url).join('\n\n')
+  }
   const lines = ['Jable.tv 暂未找到匹配影片。', '标题/识别文字：' + (result.title || '未识别')]
   if (result.codes && result.codes.length) lines.push('番号：' + result.codes.join('、'))
   else if (result.code) lines.push('番号：' + result.code)
